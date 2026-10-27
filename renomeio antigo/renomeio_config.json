@@ -1,0 +1,17 @@
+{
+  "lote": "C:\\Users\\REIS\\Documents\\PAPA 2\\LOTE 15",
+  "planilha": "C:\\Users\\REIS\\Documents\\PAPA 2\\LOTE 15\\CREDENCIAIS.xlsx",
+  "aba": "Página1",
+  "col_nome": "A",
+  "col_codigo": "B",
+  "tamanhos": [
+    "20X20",
+    "24X34",
+    "30X20"
+  ],
+  "categorias": [
+    "CAPAS",
+    "ESTOJO",
+    "LAMINAS"
+  ]
+}

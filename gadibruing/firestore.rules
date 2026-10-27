@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function entrou() {
+      return request.auth != null;
+    }
+
+    function dona(userId) {
+      return entrou() && request.auth.uid == userId;
+    }
+
+    match /usuarias/{userId} {
+      allow read: if dona(userId);
+      allow create, update: if dona(userId)
+        && request.resource.data.nome is string
+        && request.resource.data.nome.size() > 0
+        && request.resource.data.nome.size() <= 40
+        && request.resource.data.frase is string
+        && request.resource.data.frase.size() <= 180
+        && request.resource.data.apelido is string
+        && request.resource.data.apelido.size() > 0
+        && request.resource.data.apelido.size() <= 24
+        && request.resource.data.fotos is list
+        && request.resource.data.fotos.size() <= 6;
+      allow delete: if false;
+    }
+
+    match /conversa/{msgId} {
+      allow read: if entrou();
+      allow create: if entrou()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.texto is string
+        && request.resource.data.texto.size() > 0
+        && request.resource.data.texto.size() <= 500
+        && request.resource.data.apelido == get(/databases/$(database)/documents/usuarias/$(request.auth.uid)).data.apelido
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}

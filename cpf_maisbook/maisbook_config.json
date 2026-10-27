@@ -1,0 +1,39 @@
+{
+  "planilha_link": "https://docs.google.com/spreadsheets/d/1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0/edit?usp=sharing",
+  "aba": "GERAL ENVIOS",
+  "cabecalho_sge": "SGE",
+  "cabecalho_nome": "CLIENTE",
+  "cabecalho_cpf": "CPF",
+  "url_maisbook": "https://maisbook.me/wp-admin/admin.php?page=maisbook-clientes",
+  "menu_sge_cadastro": "Editar Cadastro",
+  "corrigir_curso": false,
+  "campos_atualizacao": {
+    "cliente_nome": "Nome",
+    "cliente_email": "E-mail",
+    "cliente_telefone": "Telefone",
+    "cliente_instituicao": "Instituição",
+    "cliente_curso": "Curso",
+    "cliente_numero_contrato": "Contrato",
+    "cliente_plano": "Pacote"
+  },
+  "campos_resposta_sge": [
+    "cliente_instituicao",
+    "cliente_curso"
+  ],
+  "espera_na_tela_s": 20,
+  "espera_atualizacao_s": 10,
+  "intervalo_conferencia_min": 2,
+  "conferir_ate_min": 60,
+  "timeout_ms": 20000,
+  "pausa_entre_alunos_ms": 800,
+  "curso_sge": {
+    "planilha_link": "https://docs.google.com/spreadsheets/d/1Xqhv_ttcyMI2LCGyg6j4kgAI7q13NC7icbufupsvEWM/edit?usp=sharing",
+    "aba": "1179",
+    "coluna_nome": "Nome",
+    "coluna_destino": "CURSO",
+    "rotulo_nome_sge": "Nome",
+    "timeout_ms": 20000,
+    "pausa_entre_alunos_ms": 500,
+    "espera_login_google_min": 10
+  }
+}

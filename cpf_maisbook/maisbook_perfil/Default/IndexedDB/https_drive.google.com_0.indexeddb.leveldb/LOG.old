@@ -1,0 +1,10 @@
+2026/10/15-18:07:10.218 b09c Reusing MANIFEST C:\Users\REIS\Documents\PAPA 2\vazio\cpf_maisbook\maisbook_perfil\Default\IndexedDB\https_drive.google.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/10/15-18:07:10.219 b09c Recovering log #94
+2026/10/15-18:07:10.224 b09c Reusing old log C:\Users\REIS\Documents\PAPA 2\vazio\cpf_maisbook\maisbook_perfil\Default\IndexedDB\https_drive.google.com_0.indexeddb.leveldb/000094.log 
+2026/10/15-18:07:33.306 b09c Level-0 table #99: started
+2026/10/15-18:07:33.417 b09c Level-0 table #99: 4027124 bytes OK
+2026/10/15-18:07:33.418 b09c Delete type=0 #94
+2026/10/15-18:08:35.362 8a84 Compacting 1@1 + 1@2 files
+2026/10/15-18:08:35.373 8a84 Generated table #100@1: 92 keys, 139923 bytes
+2026/10/15-18:08:35.373 8a84 Compacted 1@1 + 1@2 files => 139923 bytes
+2026/10/15-18:08:35.374 8a84 compacted to: files[ 0 0 1 0 0 0 0 ]

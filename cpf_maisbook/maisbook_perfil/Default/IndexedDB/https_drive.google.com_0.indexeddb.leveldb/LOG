@@ -1,0 +1,8 @@
+2026/10/15-18:09:08.057 b09c Reusing MANIFEST C:\Users\REIS\Documents\PAPA 2\vazio\cpf_maisbook\maisbook_perfil\Default\IndexedDB\https_drive.google.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/10/15-18:09:08.058 b09c Recovering log #98
+2026/10/15-18:09:08.062 b09c Reusing old log C:\Users\REIS\Documents\PAPA 2\vazio\cpf_maisbook\maisbook_perfil\Default\IndexedDB\https_drive.google.com_0.indexeddb.leveldb/000098.log 
+2026/10/15-18:09:08.062 b09c Delete type=2 #96
+2026/10/15-18:09:08.062 b09c Delete type=2 #99
+2026/10/15-18:09:48.388 b09c Level-0 table #103: started
+2026/10/15-18:09:48.467 b09c Level-0 table #103: 4028993 bytes OK
+2026/10/15-18:09:48.467 b09c Delete type=0 #98

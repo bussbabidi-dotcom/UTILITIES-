@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#f4f1ec">
+  <title>gadibruing</title>
+  <style>
+    :root {
+      --bg: #f4f1ec;
+      --ink: #2c2926;
+      --muted: #6f6a64;
+      --slot: #e7e2db;
+      --line: #ddd7cf;
+      --paper: #fffcf8;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    main {
+      width: min(100% - 2.5rem, 26rem);
+      margin: 0 auto;
+      padding: max(3.25rem, env(safe-area-inset-top)) 0 calc(6.5rem + env(safe-area-inset-bottom));
+    }
+    h1 {
+      margin: 0;
+      font-weight: 560;
+      font-size: clamp(2.75rem, 14vw, 4.25rem);
+      letter-spacing: -0.045em;
+      line-height: 0.92;
+    }
+    .frase {
+      margin: 1rem 0 1.25rem;
+      max-width: 18rem;
+      color: var(--muted);
+      font-size: 1.125rem;
+      line-height: 1.45;
+    }
+    .aviso {
+      margin: 0 0 1.5rem;
+      max-width: 18rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.45;
+    }
+    .fotos { display: grid; gap: 0.85rem; }
+    figure {
+      margin: 0;
+      aspect-ratio: 4 / 5;
+      border-radius: 1.35rem;
+      background: var(--slot);
+      overflow: hidden;
+    }
+    .fotos img, .moldura img, .mini img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transform-origin: center center;
+      transform: translate(calc((var(--x, 50) - 50) * 1%), calc((var(--y, 50) - 50) * 1%)) scale(var(--z, 1));
+    }
+    .barra, .acoes {
+      display: flex;
+      gap: 0.55rem;
+    }
+    .barra {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 2;
+      padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+      background: color-mix(in srgb, var(--bg) 90%, transparent);
+      backdrop-filter: blur(10px);
+    }
+    .barra button, .acoes button, .primario, .secundario {
+      border: 0;
+      border-radius: 999px;
+      padding: 0.9rem 1rem;
+      background: var(--ink);
+      color: var(--bg);
+    }
+    .barra button, .acoes button { flex: 1; }
+    .secundario {
+      background: transparent;
+      color: var(--ink);
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+    .tela {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      padding: max(1rem, env(safe-area-inset-top)) 1.15rem max(1rem, env(safe-area-inset-bottom));
+    }
+    .auth {
+      justify-content: center;
+      width: min(100% - 2.5rem, 24rem);
+      margin: 0 auto;
+      background: transparent;
+      position: relative;
+      min-height: 100dvh;
+      padding-top: max(2rem, env(safe-area-inset-top));
+    }
+    .auth h1 { margin-bottom: 1.5rem; }
+    form { display: flex; flex-direction: column; gap: 0.7rem; }
+    input, textarea {
+      width: 100%;
+      border: 0;
+      border-radius: 0.95rem;
+      background: var(--paper);
+      padding: 0.9rem 1rem;
+      font-size: 1rem;
+    }
+    textarea { min-height: 5.5rem; resize: vertical; }
+    .erro, .status {
+      min-height: 1.3rem;
+      margin: 0;
+      color: #8a4b3c;
+      font-size: 0.92rem;
+    }
+    .status { color: var(--muted); }
+    .corpo {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      width: min(100%, 36rem);
+      margin: 0 auto;
+      padding-bottom: 0.5rem;
+    }
+    .topo {
+      width: min(100%, 36rem);
+      margin: 0 auto 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .topo h2 { margin: 0; font-size: 1.35rem; font-weight: 560; }
+    label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.92rem; color: var(--muted); }
+    .foto-edit {
+      display: grid;
+      grid-template-columns: 4.6rem 1fr;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .mini {
+      aspect-ratio: 4 / 5;
+      border-radius: 0.8rem;
+      overflow: hidden;
+      background: var(--slot);
+    }
+    .botoes { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .botoes button, .link {
+      border: 0;
+      background: var(--paper);
+      border-radius: 999px;
+      padding: 0.55rem 0.75rem;
+      font-size: 0.92rem;
+    }
+    .botoes button:disabled { opacity: 0.4; }
+    .moldura {
+      width: min(100%, 22rem);
+      margin: 0 auto;
+      aspect-ratio: 4 / 5;
+      border-radius: 1.35rem;
+      overflow: hidden;
+      background: var(--slot);
+      touch-action: none;
+    }
+    .dica { text-align: center; color: var(--muted); margin: 0.25rem 0 1rem; }
+    .zoom { margin: 1rem auto 0; width: min(100%, 22rem); }
+    .conversa .miolo {
+      width: min(100%, 40rem);
+      margin: 0 auto;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .mensagens {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      padding: 0.25rem 0 0.75rem;
+    }
+    .msg {
+      max-width: 82%;
+      align-self: flex-start;
+      background: var(--paper);
+      border-radius: 1.05rem 1.05rem 1.05rem 0.35rem;
+      padding: 0.55rem 0.75rem 0.45rem;
+    }
+    .msg.minha {
+      align-self: flex-end;
+      background: var(--ink);
+      color: var(--bg);
+      border-radius: 1.05rem 1.05rem 0.35rem 1.05rem;
+    }
+    .quem { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.15rem; }
+    .msg time { display: block; margin-top: 0.2rem; font-size: 0.7rem; opacity: 0.65; }
+    .enviar { display: flex; flex-direction: row; gap: 0.5rem; align-items: center; }
+    .enviar input { flex: 1; min-width: 0; width: auto; }
+    .enviar button { border: 0; border-radius: 999px; padding: 0.9rem 1rem; background: var(--ink); color: var(--bg); }
+    @media (min-width: 800px) {
+      main { width: min(100% - 4rem, 44rem); padding-top: 4.5rem; }
+      .fotos { grid-template-columns: 1fr 1fr; gap: 1rem; }
+      .frase, .aviso { max-width: 22rem; }
+    }
+  </style>
+</head>
+<body>
+  <main id="pagina">
+    <h1 id="nome">gadibruing</h1>
+    <p class="frase" id="frase">aqui é só nosso.</p>
+    <p class="aviso" id="aviso">Conta, edição e conversa dependem do Firebase.</p>
+    <div class="fotos" id="fotos">
+      <figure></figure>
+      <figure></figure>
+      <figure></figure>
+      <figure></figure>
+      <figure></figure>
+      <figure></figure>
+    </div>
+  </main>
+
+  <div class="barra" id="barra" hidden>
+    <button type="button" id="abrir-editar">editar</button>
+    <button type="button" id="abrir-conversa" class="secundario">conversa</button>
+  </div>
+
+  <p class="status tela" id="carregando" hidden>carregando</p>
+
+  <section class="tela auth" id="auth" hidden>
+    <h1>gadibruing</h1>
+    <form id="form-auth">
+      <input id="apelido" name="apelido" maxlength="24" autocomplete="username" placeholder="apelido" required>
+      <input id="senha" name="senha" type="password" minlength="6" autocomplete="current-password" placeholder="senha" required>
+      <p class="erro" id="erro-auth"></p>
+      <button type="submit" class="primario">entrar</button>
+      <button type="button" id="criar" class="secundario">criar usuário</button>
+    </form>
+  </section>
+
+  <section class="tela" id="editor" hidden>
+    <div class="topo">
+      <h2>editar sua página</h2>
+    </div>
+    <div class="corpo">
+      <label>nome <input id="edit-nome" maxlength="40"></label>
+      <label>frase <textarea id="edit-frase" maxlength="180"></textarea></label>
+      <div id="edit-fotos"></div>
+      <button type="button" id="add-foto" class="secundario">adicionar foto</button>
+      <input id="arquivo" type="file" accept="image/*" hidden>
+      <p class="erro" id="erro-editor"></p>
+      <div class="acoes">
+        <button type="button" id="concluir">concluir</button>
+        <button type="button" id="fechar-editor" class="secundario">fechar</button>
+      </div>
+      <button type="button" id="sair" class="link">sair</button>
+    </div>
+  </section>
+
+  <section class="tela" id="enquadrar" hidden>
+    <p class="dica">arraste a foto e ajuste o zoom</p>
+    <div class="moldura" id="moldura"><img id="recorte" alt=""></div>
+    <label class="zoom">zoom <input id="zoom" type="range" min="1" max="2.5" step="0.01" value="1"></label>
+    <div class="acoes" style="width:min(100%,22rem);margin:1rem auto 0">
+      <button type="button" id="recorte-pronto">pronto</button>
+      <button type="button" id="recorte-cancelar" class="secundario">cancelar</button>
+    </div>
+  </section>
+
+  <section class="tela conversa" id="conversa" hidden>
+    <div class="miolo">
+      <div class="topo">
+        <h2>conversa</h2>
+        <button type="button" id="fechar-conversa" class="secundario">fechar</button>
+      </div>
+      <div class="mensagens" id="mensagens"></div>
+      <form class="enviar" id="enviar">
+        <input id="texto" maxlength="500" placeholder="mensagem" autocomplete="off">
+        <button type="submit">enviar</button>
+      </form>
+      <p class="erro" id="erro-conversa"></p>
+    </div>
+  </section>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
