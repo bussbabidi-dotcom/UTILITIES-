@@ -3,12 +3,14 @@
   "url_clientes": "https://sistema.sge.com.br/SGE/Forms/Cliente.aspx",
   "prefixo_codigo": "633.",
   "planilha": "C:\\Users\\REIS\\Documents\\PAPA 2\\vazio\\BAIXA_TESTE.xlsx",
-  "aba": "Página47",
-  "linha_inicial": 2,
-  "col_sge": "C",
-  "col_nome": "A",
-  "col_status": "G",
-  "col_item": "D",
+  "aba": "ALBUNS COLAÇAO",
+  "linha_inicial": 19,
+  "col_sge": "E",
+  "col_nome": "C",
+  "col_status": "K",
+  "col_item": "F",
+  "col_cpf": "H",
+  "col_maisbook": "I",
   "itens_incluir": [
     "ENCADERNA",
     "ALBUM",
@@ -26,6 +28,8 @@
   "conferir_nome": true,
   "timeout_ms": 20000,
   "pausa_entre_alunos_ms": 800,
+  "intervalo_vigia_segundos": 15,
+  "url_painel_notificacoes": "",
   "texto_tela_cliente": [
     "Grade Financeira",
     "Mais Ações"
@@ -35,10 +39,30 @@
     "Ver Pedidos"
   ],
   "menu_status": "Alterar Status do Item",
+  "ordem_coluna_k": [
+    "Sem álbum",
+    "AGUARDANDO FOTO",
+    "EM DIAGRAMAÇÃO",
+    "DIAGRAMADO",
+    "Aguardando Aprovação",
+    "Com Modificações",
+    "Aprovado",
+    "IMPRESSÃO",
+    "Finalizado"
+  ],
+  "etapas_api_maisbook": [
+    "Sem álbum",
+    "Aguardando Aprovação",
+    "Com Modificações",
+    "Aprovado"
+  ],
   "mapa_status": {
-    "AGUARDANDO APROVACAO": "Enviado para Aprovação"
+    "AGUARDANDO APROVACAO": "Enviado para Aprovação",
+    "APROVADO": "Aprovado",
+    "IMPRESSAO": "Em Impressão",
+    "FINALIZADO": "Pronto"
   },
-  "ui_status": "Pronto",
+  "ui_status": "(usar o da planilha)",
   "planilha_link": "https://docs.google.com/spreadsheets/d/1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0/edit?usp=sharing",
   "itens_prioritarios": [
     "ENCADERNACAO ALBUM",
@@ -51,7 +75,16 @@
   ],
   "status_adiante": {
     "ENVIADO PARA APROVACAO": [
-      "EM IMPRESSAO"
+      "APROVADO",
+      "EM IMPRESSAO",
+      "PRONTO"
+    ],
+    "APROVADO": [
+      "EM IMPRESSAO",
+      "PRONTO"
+    ],
+    "EM IMPRESSAO": [
+      "PRONTO"
     ]
   },
   "data_status": "",
