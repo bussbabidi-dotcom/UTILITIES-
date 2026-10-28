@@ -387,10 +387,11 @@ class Janela:
         botoes = tk.Frame(sec, bg=COR_FUNDO)
         botoes.grid(row=4, column=0, columnspan=8, sticky="w", pady=(4, 0))
         self.b_iniciar = self._botao(botoes, "▶  Iniciar", self._iniciar, COR_VERDE)
+        self.b_vigia = self._botao(botoes, "♾  Vigia Contínuo (Sem Fim)", self._iniciar_vigia, COR_FORTE)
         self.b_continuar = self._botao(botoes, "⏩  Continuar de onde parou", self._continuar, COR_VERDE)
         self.b_parar = self._botao(botoes, "■  Parar", self._parar, COR_VERMELHO)
         self.b_relatorio = self._botao(botoes, "Abrir relatório", self._abrir_relatorio, COR_CINZA)
-        for botao in (self.b_iniciar, self.b_continuar, self.b_parar, self.b_relatorio):
+        for botao in (self.b_iniciar, self.b_vigia, self.b_continuar, self.b_parar, self.b_relatorio):
             botao.pack(side="left", padx=3)
 
     # ------------------------------------------------------------------ dados
@@ -819,6 +820,16 @@ class Janela:
         if self._confirmar_real():
             self._rodar(argumentos)
 
+    def _iniciar_vigia(self):
+        if not self._salvar_planilha():
+            return
+        argumentos = self._opcoes_rodada()
+        if argumentos is None:
+            return
+        argumentos.append("--vigia")
+        if self._confirmar_real():
+            self._rodar(argumentos)
+
     def _continuar(self):
         prog = ler_json(PROGRESSO)
         if not prog.get("proxima_linha") or prog.get("concluido"):
@@ -908,6 +919,19 @@ class Janela:
                     except ValueError:
                         pass
                     continue
+                if linha.startswith("NOTIFICACAO_JSON:"):
+                    try:
+                        evt = json.loads(linha[len("NOTIFICACAO_JSON:"):])
+                        self.root.bell()
+                        self._escrever(
+                            f"🔔 [NOTIFICAÇÃO TEMPO REAL] SGE {evt.get('sge')} — {evt.get('nome')} "
+                            f"(CPF: {evt.get('cpf') or 'N/I'}): Coluna K '{evt.get('statusColunaK')}' "
+                            f"➔ SGE '{evt.get('acaoSge')}'\n",
+                            "ok",
+                        )
+                    except ValueError:
+                        pass
+                    continue
                 self._escrever(linha, self._tag(linha))
                 achado = re.match(r"\s*\[(\d+)/(\d+)\]\s*(.*)", linha)
                 if achado:
@@ -946,7 +970,7 @@ class Janela:
 
     def _botoes_rodando(self, rodando):
         estado_livre = "disabled" if rodando else "normal"
-        for botao in (self.b_iniciar, self.b_continuar):
+        for botao in (self.b_iniciar, self.b_vigia, self.b_continuar):
             botao.config(state=estado_livre)
         self.b_parar.config(state="normal" if rodando else "disabled", text="■  Parar")
 
