@@ -72,12 +72,14 @@ CONFIG_PADRAO = {
     "planilha": str(PASTA / "BAIXA_TESTE.xlsx"),
     # se preenchido, a planilha é baixada deste link do Google (tem prioridade sobre "planilha")
     "planilha_link": "",
-    "aba": "",
-    "linha_inicial": 2,
-    "col_sge": "A",
-    "col_nome": "B",
-    "col_status": "C",
-    "col_item": "D",
+    "aba": "ALBUNS COLAÇAO",
+    "linha_inicial": 19,
+    "col_sge": "E",
+    "col_nome": "C",
+    "col_status": "K",
+    "col_item": "F",
+    "col_cpf": "H",
+    "col_maisbook": "I",
     "itens_incluir": ["ENCADERNA", "ALBUM", "BOOK"],
     "itens_excluir": ["DIGITAL"],
     # o álbum vendido separado tem prioridade sobre o plano/pacote
@@ -87,18 +89,46 @@ CONFIG_PADRAO = {
     "pular_pedidos_com_texto": ["CANCELADO"],
     "ignorar_itens_com_status": ["ENTREGUE", "CANCELADO"],
     # novo status -> status que já estão além dele (o item não volta)
-    "status_adiante": {"ENVIADO PARA APROVACAO": ["EM IMPRESSAO"]},
+    "status_adiante": {
+        "ENVIADO PARA APROVACAO": ["APROVADO", "EM IMPRESSAO", "PRONTO"],
+        "APROVADO": ["EM IMPRESSAO", "PRONTO"],
+        "EM IMPRESSAO": ["PRONTO"],
+    },
+    "ordem_coluna_k": [
+        "Sem álbum",
+        "AGUARDANDO FOTO",
+        "EM DIAGRAMAÇÃO",
+        "DIAGRAMADO",
+        "Aguardando Aprovação",
+        "Com Modificações",
+        "Aprovado",
+        "IMPRESSÃO",
+        "Finalizado",
+    ],
+    "etapas_api_maisbook": [
+        "Sem álbum",
+        "Aguardando Aprovação",
+        "Com Modificações",
+        "Aprovado",
+    ],
     "observacao": "",
     # data da alteração (dd/mm/aaaa); vazia = hoje
     "data_status": "",
     "conferir_nome": True,
     "timeout_ms": 20000,
     "pausa_entre_alunos_ms": 800,
+    "intervalo_vigia_segundos": 15,
+    "url_painel_notificacoes": "",
     # aprendido com o usuário
     "texto_tela_cliente": ["Grade Financeira", "Mais Ações"],
     "caminho_pedidos": ["Mais Ações", "Ver Pedidos"],
     "menu_status": "Alterar Status",
-    "mapa_status": {},
+    "mapa_status": {
+        "AGUARDANDO APROVACAO": "Enviado para Aprovação",
+        "APROVADO": "Aprovado",
+        "IMPRESSAO": "Em Impressão",
+        "FINALIZADO": "Pronto",
+    },
     "status_sge_conhecidos": [],
     "palavras_genericas": ["PACOTE", "PLANO", "STUDIO", "DAY", "KIT", "COMBO"],
     "apelidos_itens": {},
@@ -227,13 +257,16 @@ def ler_planilha(cfg):
     if cfg.get("aba") and cfg["aba"] not in livro.sheetnames:
         raise ValueError(f"A aba '{cfg['aba']}' não existe. Abas: {', '.join(livro.sheetnames)}")
     folha = livro[cfg["aba"]] if cfg.get("aba") else livro.active
-    colunas = {chave: indice_coluna(cfg.get("col_" + chave)) for chave in ("sge", "nome", "status", "item")}
+    colunas = {
+        chave: indice_coluna(cfg.get("col_" + chave))
+        for chave in ("sge", "nome", "status", "item", "cpf", "maisbook")
+    }
     inicio = int(cfg.get("linha_inicial") or 2)
 
     alunos = []
     for numero, linha in enumerate(folha.iter_rows(min_row=inicio, values_only=True), start=inicio):
         def pegar(chave):
-            indice = colunas[chave]
+            indice = colunas.get(chave)
             if not indice or indice > len(linha):
                 return ""
             return valor_celula(linha[indice - 1])
@@ -247,6 +280,8 @@ def ler_planilha(cfg):
             "nome": pegar("nome"),
             "status": pegar("status"),
             "item": pegar("item"),
+            "cpf": pegar("cpf"),
+            "maisbook": pegar("maisbook"),
         })
 
     livro.close()
@@ -341,10 +376,71 @@ def status_ignorado(status_item, cfg):
     return any(normalizar(s) in atual for s in cfg.get("ignorar_itens_com_status", []) if s)
 
 
-def status_desejado(cfg, status_planilha):
-    """Texto do status no SGE: o aprendido (mapa_status) ou o da planilha."""
+MAPA_COLUNA_K_PADRAO = {
+    "AGUARDANDO APROVACAO": "Enviado para Aprovação",
+    "APROVADO": "Aprovado",
+    "IMPRESSAO": "Em Impressão",
+    "FINALIZADO": "Pronto",
+}
 
-    return cfg.get("mapa_status", {}).get(normalizar(status_planilha), status_planilha)
+ETAPAS_SEM_ACAO_SGE = {
+    "SEM ALBUM",
+    "AGUARDANDO FOTO",
+    "EM DIAGRAMACAO",
+    "DIAGRAMADO",
+    "COM MODIFICACOES",
+}
+
+
+def status_desejado(cfg, status_planilha):
+    """
+    Traduz o status da Coluna K da planilha para a ação correspondente no SGE:
+      - Aguardando Aprovação -> Enviado para Aprovação
+      - Aprovado             -> Aprovado
+      - IMPRESSÃO            -> Em Impressão
+      - Finalizado           -> Pronto
+    """
+    chave = normalizar(status_planilha)
+    mapa = {**MAPA_COLUNA_K_PADRAO, **{normalizar(k): v for k, v in cfg.get("mapa_status", {}).items()}}
+    return mapa.get(chave, status_planilha)
+
+
+def status_tem_acao_sge(cfg, status_planilha):
+    """Indica se o status da Coluna K deve disparar atualização no SGE (ignora etapas iniciais sem baixa)."""
+    chave = normalizar(status_planilha)
+    if not chave or chave in ETAPAS_SEM_ACAO_SGE:
+        return False
+    return True
+
+
+def notificar_tempo_real(cfg, aluno, resultado, detalhe=""):
+    """Envia notificação em tempo real para a interface e, se configurado, para o painel web."""
+    acao_sge = status_desejado(cfg, aluno.get("status", ""))
+    evento = {
+        "linhaPlanilha": aluno.get("linha"),
+        "sge": aluno.get("sge"),
+        "nome": aluno.get("nome"),
+        "cpf": aluno.get("cpf", ""),
+        "maisbook": aluno.get("maisbook", ""),
+        "statusColunaK": aluno.get("status", ""),
+        "acaoSge": acao_sge,
+        "resultado": resultado,
+        "detalhe": detalhe,
+        "timestamp": datetime.now().isoformat(),
+    }
+    print("NOTIFICACAO_JSON:" + json.dumps(evento, ensure_ascii=False))
+    url_painel = (cfg.get("url_painel_notificacoes") or "").strip().rstrip("/")
+    if url_painel:
+        try:
+            req = urllib.request.Request(
+                f"{url_painel}/api/agent/event",
+                data=json.dumps(evento).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=4).close()
+        except Exception:
+            pass
 
 
 def mesmo_status(atual, desejado):
@@ -1564,10 +1660,14 @@ def rodar(cfg, args):
             print(f"O código {args.sge} não está na planilha.")
             return
 
+    if not args.status:
+        # Filtra apenas linhas cuja Coluna K tem ação no SGE (Aguardando Aprovação, Aprovado, IMPRESSÃO, Finalizado)
+        alunos = [a for a in alunos if status_tem_acao_sge(cfg, a["status"])]
+
     feitas = carregar_feitas()
     reenviar = bool(args.mesmo_status)
     marca_reenvio = f"|REENVIO|{data_da_rodada(cfg)}|{normalizar(cfg.get('observacao'))}" if reenviar else ""
-    chave = lambda a: f"{a['sge']}|{normalizar(a['status'])}|{normalizar(a['item'])}{marca_reenvio}"
+    chave = lambda a: f"{a['sge']}|{normalizar(status_desejado(cfg, a['status']))}|{normalizar(a['item'])}{marca_reenvio}"
     ja_feitos = [a for a in alunos if chave(a) in feitas and not args.refazer]
     alunos = [a for a in alunos if chave(a) not in feitas or args.refazer]
     if args.limite:
@@ -1575,7 +1675,7 @@ def rodar(cfg, args):
 
     real = not args.simular
     interativo = not args.sem_pausa and terminal_interativo()
-    guardar = real and not args.sge
+    guardar = real and not args.sge and not getattr(args, "vigia", False)
     print("=" * 70)
     print("ROBÔ SGE — ALTERAR STATUS —", "MODO REAL (vai alterar)" if real else "SIMULAÇÃO (clica em Cancelar no fim)")
     print(f"Planilha: {cfg.get('planilha_link') or cfg['planilha']}")
@@ -1623,8 +1723,11 @@ def rodar(cfg, args):
                     break
 
                 certos = [r for r in resultados if r in ("ALTERADO", "REENVIADO", "JA NO STATUS")]
+                if any(r in ("ALTERADO", "REENVIADO") for r in resultados):
+                    notificar_tempo_real(cfg, aluno, "ALTERADO", f"SGE atualizado para {status_desejado(cfg, aluno['status'])}")
                 if real and certos and all(r in ("ALTERADO", "REENVIADO", "JA NO STATUS", "SEM ITEM") for r in resultados):
-                    feitas[chave(aluno)] = {"nome": aluno["nome"], "status": aluno["status"],
+                    feitas[chave(aluno)] = {"nome": aluno["nome"], "status": status_desejado(cfg, aluno["status"]),
+                                            "cpf": aluno.get("cpf", ""),
                                             "data": f"{datetime.now():%Y-%m-%d %H:%M:%S}"}
                     salvar_feitas(feitas)
                 if guardar:
@@ -1832,6 +1935,10 @@ def main():
                         help="reaplica o status mesmo se o item já estiver nele (reenvio com nova data/observação)")
     parser.add_argument("--continuar", action="store_true", help="continua da linha salva em baixa_progresso.json")
     parser.add_argument("--linha", type=int, help="começa nesta linha da planilha")
+    parser.add_argument("--vigia", action="store_true",
+                        help="monitora a planilha de forma contínua e sem fim, atualizando o SGE automaticamente")
+    parser.add_argument("--intervalo", type=int, default=15,
+                        help="segundos entre verificações no modo --vigia (padrão: 15)")
     args = parser.parse_args()
 
     cfg = carregar_config()
@@ -1869,9 +1976,82 @@ def main():
     elif args.listar:
         for aluno in ler_planilha(cfg):
             item = f" | item: {aluno['item']}" if aluno["item"] else " | itens: encadernação/álbum/book"
-            print(f"linha {aluno['linha']}: SGE {aluno['sge']} — {aluno['nome']} -> {aluno['status'] or '(SEM STATUS)'}{item}")
+            no_sge = status_desejado(cfg, aluno["status"]) if status_tem_acao_sge(cfg, aluno["status"]) else "(aguardando etapa SGE)"
+            print(f"linha {aluno['linha']}: SGE {aluno['sge']} — {aluno['nome']} (CPF: {aluno.get('cpf') or 'N/I'}) -> {aluno['status'] or '(SEM STATUS)'} [SGE: {no_sge}]{item}")
+    elif args.vigia:
+        rodar_vigia_continuo(cfg, args)
     else:
         rodar(cfg, args)
+
+
+def rodar_vigia_continuo(cfg, args):
+    """
+    Monitora continuamente (sem fim) a planilha local (via Watchdog + loop) ou link do Google,
+    puxando os comandos necessários de baixa e atualizando o SGE sempre que houver novidades.
+    """
+    intervalo = max(5, int(args.intervalo or cfg.get("intervalo_vigia_segundos") or 15))
+    PARAR.unlink(missing_ok=True)
+    print("=" * 70)
+    print(f"🚀 VIGIA CONTÍNUO SGE INICIADO (LOOP SEM FIM — a cada {intervalo}s)")
+    print(f"Monitorando: {cfg.get('planilha_link') or cfg.get('planilha')}")
+    print("Regras de ação no SGE:")
+    print("  • Aguardando Aprovação -> Enviado para Aprovação")
+    print("  • Aprovado             -> Aprovado")
+    print("  • IMPRESSÃO            -> Em Impressão")
+    print("  • Finalizado           -> Pronto")
+    print("=" * 70)
+
+    observer = None
+    disparo_watchdog = {"modificado": True, "ultimo": 0.0}
+
+    if not cfg.get("planilha_link"):
+        try:
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
+
+            caminho_arq = Path(cfg["planilha"]).resolve()
+
+            class HandlerPlanilha(FileSystemEventHandler):
+                def on_modified(self, event):
+                    if Path(event.src_path).resolve() == caminho_arq:
+                        agora = time.time()
+                        if agora - disparo_watchdog["ultimo"] >= 5:
+                            disparo_watchdog["ultimo"] = agora
+                            disparo_watchdog["modificado"] = True
+                            print("\n🔄 Alteração detectada na planilha pelo Watchdog! Verificando baixas...")
+
+            if caminho_arq.parent.exists():
+                observer = Observer()
+                observer.schedule(HandlerPlanilha(), path=str(caminho_arq.parent), recursive=False)
+                observer.start()
+        except Exception:
+            observer = None
+
+    ciclo = 0
+    try:
+        while not PARAR.exists():
+            ciclo += 1
+            try:
+                for k in CONTADORES:
+                    CONTADORES[k] = 0
+                rodar(cfg, args)
+            except Exception as erro:
+                print(f"⚠️ Aviso no ciclo #{ciclo} do vigia contínuo (continuando sem parar): {erro}")
+
+            # Aguarda até o próximo ciclo ou até o Watchdog detectar modificação imediata
+            inicio_espera = time.time()
+            disparo_watchdog["modificado"] = False
+            while time.time() - inicio_espera < intervalo and not PARAR.exists():
+                if disparo_watchdog["modificado"]:
+                    time.sleep(2)
+                    break
+                time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nVigia contínuo encerrado pelo usuário.")
+    finally:
+        if observer is not None:
+            observer.stop()
+            observer.join()
 
 
 if __name__ == "__main__":
