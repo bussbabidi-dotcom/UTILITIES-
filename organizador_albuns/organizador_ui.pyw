@@ -376,6 +376,7 @@ class JanelaOrganizador:
         self.envio_limite = tk.StringVar(value="")
         self.envio_intervalo = tk.StringVar(value=str(cfg.get("envio_intervalo", 60)))
         self.envio_simular = tk.BooleanVar(value=False)
+        self.envio_exigir_coluna_m = tk.BooleanVar(value=cfg.get("envio_exigir_coluna_m", True))
         self.envio_atualizar_planilha = tk.BooleanVar(value=cfg.get("envio_atualizar_planilha", True))
         self.envio_baixa_sge = tk.BooleanVar(value=cfg.get("envio_baixa_sge", True))
         self.status = tk.StringVar(value="Escolha a guia do programa.")
@@ -569,10 +570,11 @@ class JanelaOrganizador:
         quem.columnconfigure(0, weight=1)
         ttk.Label(
             quem,
-            text="Quem está com STATUS DIAGRAMADO na planilha ALBUNS 25.2 (Coluna C = NOME, Coluna E = SGE, Coluna K = STATUS).\n"
-            "Fase 1: procura capa e álbum de todos no servidor.\n"
-            "Fase 2: só quem tem os dois — sobe para ALBUM APROVAÇAO no Drive, cola o link em Álbum pronto no MaisBook, "
-            "envia o e-mail de aprovação, avança a Coluna K para 'Aguardando Aprovação' e dá baixa no SGE como 'Enviado para Aprovação'.",
+            text="1º Filtro: STATUS = DIAGRAMADO (Coluna K) + OK na Coluna M (CAPA = DIAGRAMADO / OK / CAPA ENTREGUE).\n"
+            "2º Conferência Anti-Erro no Servidor (Fase 1): Mesmo com OK na Coluna M, confere antes no servidor se a capa "
+            "e todas as lâminas JPG estão completas. Se você tiver dado OK por engano e faltar arquivo, o envio é bloqueado.\n"
+            "3º Envio (Fase 2): Sobe para ALBUM APROVAÇAO no Drive, cola o link no MaisBook, envia o e-mail, "
+            "avança a Coluna K para 'Aguardando Aprovação' e dá baixa no SGE como 'Enviado para Aprovação'.",
             wraplength=920,
         ).grid(row=0, column=0, sticky="w")
 
@@ -594,18 +596,23 @@ class JanelaOrganizador:
         opcoes_auto.grid(row=1, column=0, columnspan=7, sticky="w", pady=(6, 0))
         ttk.Checkbutton(
             opcoes_auto,
-            text="Atualizar Coluna K para 'Aguardando Aprovação' após envio",
+            text="Exigir OK na Coluna M (CAPA) para enviar",
+            variable=self.envio_exigir_coluna_m,
+        ).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(
+            opcoes_auto,
+            text="Atualizar Coluna K ('Aguardando Aprovação')",
             variable=self.envio_atualizar_planilha,
         ).pack(side="left", padx=(0, 16))
         ttk.Checkbutton(
             opcoes_auto,
-            text="Dar baixa automática no SGE ('Enviado para Aprovação')",
+            text="Baixa no SGE ('Enviado para Aprovação')",
             variable=self.envio_baixa_sge,
         ).pack(side="left")
 
         ttk.Label(
             filtros,
-            text="SGE e limite são opcionais. Em 'Vigia Contínuo', o robô monitora sem fim a planilha e o servidor.",
+            text="Mesmo com o OK na Coluna M (CAPA), o robô confere fisicamente a capa e todas as lâminas no servidor antes de enviar.",
             style="Fraco.TLabel",
         ).grid(row=2, column=0, columnspan=7, sticky="w", pady=(6, 0))
 
@@ -1221,6 +1228,8 @@ class JanelaOrganizador:
                 messagebox.showerror("Enviar aprovação", "O limite é a quantidade de pessoas.")
                 return None
             argumentos += ["--limite", limite]
+        if not self.envio_exigir_coluna_m.get():
+            argumentos += ["--ignorar-coluna-m"]
         if not self.envio_atualizar_planilha.get():
             argumentos += ["--sem-planilha"]
         if not self.envio_baixa_sge.get():
