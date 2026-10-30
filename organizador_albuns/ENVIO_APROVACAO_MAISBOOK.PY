@@ -307,7 +307,70 @@ def aplicar_edicoes_locais_no_xlsx(caminho_xlsx):
         pass
 
 
+def _ler_diagramados_de_csv_local():
+    caminhos_csv = [
+        PASTA.parent / "public" / "assets" / "aistudio" / "ALBUNS_25_73835ec6.2",
+        PASTA.parent / "ALBUNS_25_2_COLACAO.csv",
+        PASTA / "ALBUNS_25_2_COLACAO.csv",
+    ]
+    arq_csv = next((c for c in caminhos_csv if c.is_file()), None)
+    if not arq_csv:
+        return []
+    pessoas = {}
+    with arq_csv.open("r", encoding="utf-8", errors="replace") as f:
+        leitor = csv.reader(f)
+        for numero, linha in enumerate(leitor, start=1):
+            if numero <= 18 or len(linha) < 11:
+                continue
+            status_k = (linha[10] if len(linha) > 10 else "").strip()
+            if normalizar(status_k) != "diagramado":
+                continue
+            nome = (linha[2] if len(linha) > 2 else "").strip()
+            cont = so_contrato(linha[3] if len(linha) > 3 else "")
+            sge = limpar_sge(linha[4] if len(linha) > 4 else "")
+            plano = (linha[5] if len(linha) > 5 else "").strip()
+            codigo = re.sub(r"\s+", "", (linha[8] if len(linha) > 8 else "")).upper()
+            capa_plan = (linha[12] if len(linha) > 12 else "").strip()
+            if not nome or not re.fullmatch(r"\d+", sge):
+                continue
+            pessoa = pessoas.setdefault(sge, {
+                "nome": nome,
+                "sge": sge,
+                "contrato": cont,
+                "codigo": codigo,
+                "linha": numero,
+                "aba": "GERAL ENVIOS",
+                "col_status": 11,
+                "col_capa": 13,
+                "capa_planilha": capa_plan,
+                "liberado_coluna_m": capa_liberada_na_planilha(capa_plan),
+                "planos": [],
+                "tamanhos": [],
+                "avisos": [],
+                "duplicados": [],
+            })
+            if capa_plan and not pessoa.get("capa_planilha"):
+                pessoa["capa_planilha"] = capa_plan
+            if capa_liberada_na_planilha(capa_plan):
+                pessoa["liberado_coluna_m"] = True
+            if plano and plano not in pessoa["planos"]:
+                pessoa["planos"].append(plano)
+            for tamanho in tamanhos_do_plano(plano):
+                if tamanho not in pessoa["tamanhos"]:
+                    pessoa["tamanhos"].append(tamanho)
+    lista = list(pessoas.values())
+    qtd_liberados_m = sum(1 for p in lista if p.get("liberado_coluna_m"))
+    qtd_aguardando_m = len(lista) - qtd_liberados_m
+    print(
+        f"Aba: GERAL ENVIOS (CSV) | STATUS DIAGRAMADO (Coluna K): {len(lista)} | "
+        f"Liberados na Coluna M (CAPA): {qtd_liberados_m} | Aguardando OK na Coluna M: {qtd_aguardando_m}"
+    )
+    return lista
+
+
 def ler_diagramados():
+    if proc.load_workbook is None:
+        return _ler_diagramados_de_csv_local()
     caminho = proc.baixar_planilha_link(PLANILHA_LINK, PLANILHA)
     aplicar_edicoes_locais_no_xlsx(caminho)
     livro = proc.load_workbook(caminho, data_only=True)
@@ -398,48 +461,68 @@ def ler_diagramados():
 IGNORAR_NO_NOME = {"da", "de", "do", "dos", "das", "e", "di", "du"}
 
 
-def capa_e_da_pessoa(nome, arquivo):
-    """As duas primeiras palavras do nome têm que aparecer inteiras no arquivo, não só 'da' ou 'silva'."""
-
+def capa_e_da_pessoa(nome, arquivo, sge=""):
+    """Confere se o caminho do arquivo/pasta pertence à pessoa (pelo nome completo, 2 primeiras palavras ou código SGE)."""
+    texto_norm = normalizar(str(arquivo))
+    palavras_texto = set(texto_norm.split())
+    if sge and str(sge).strip() and str(sge).strip() in palavras_texto:
+        return True
+    if proc.capa_da_pessoa(nome, [str(arquivo)]):
+        return True
     palavras = [p for p in normalizar(nome).split() if len(p) > 2 and p not in IGNORAR_NO_NOME]
     if not palavras:
         return False
-    texto = set(normalizar(str(arquivo)).split())
-    return all(palavra in texto for palavra in palavras[:2])
+    return all(palavra in palavras_texto for palavra in palavras[:2])
 
 
-def procurar_capa_da_pessoa(albuns, nome, tamanho):
+def procurar_capa_da_pessoa(albuns, nome, tamanho, sge=""):
+    # 1. Tenta primeiro pelo buscador oficial de capas (que valida subpastas de tamanho + proporção da imagem)
+    capa_geral = proc.procurar_capa_geral(albuns, nome, tamanho)
+    if capa_geral and Path(capa_geral).is_file():
+        return Path(capa_geral)
+
+    # 2. Procura na pasta CAPAS geral por nome ou código SGE
     pasta_capas = albuns / proc.PASTA_CAPAS
-    if not pasta_capas.exists():
-        return None
+    candidatos_capas = []
+    if pasta_capas.exists():
+        candidatos_capas.extend(proc.listar_arquivos_capas(pasta_capas))
+
+    # 3. Também procura se existir estrutura de lote <TAMANHO>/CAPAS
+    pasta_capas_lote = albuns / tamanho / "CAPAS"
+    if pasta_capas_lote.exists():
+        candidatos_capas.extend(proc.listar_arquivos_capas(pasta_capas_lote))
+
     melhor = None
-    for arquivo in proc.listar_arquivos_capas(pasta_capas):
-        if not capa_e_da_pessoa(nome, arquivo):
+    for arquivo in candidatos_capas:
+        if not capa_e_da_pessoa(nome, arquivo, sge=sge):
             continue
         nomes = [arquivo.stem]
         for pai in arquivo.parents:
-            if pai == pasta_capas:
+            if pai in (pasta_capas, pasta_capas_lote, albuns):
                 break
             nomes.append(pai.name)
         mencoes = set()
         for item in nomes:
             mencoes |= proc.tamanhos_mencionados(item)
+        if mencoes and tamanho not in mencoes:
+            continue
         if tamanho in mencoes and mencoes == {tamanho}:
             prioridade = 2
         elif tamanho in mencoes:
             prioridade = 1
         else:
             prioridade = 0
-        candidato = (prioridade, proc.pontuacao_nome(nome, " ".join(nomes)), -len(arquivo.parts))
+        pts = max(proc.pontuacao_nome(nome, " ".join(nomes)), 1 if (sge and str(sge) in normalizar(arquivo.stem).split()) else -1)
+        candidato = (prioridade, pts, -len(arquivo.parts))
         if melhor is None or candidato > melhor[0]:
             melhor = (candidato, arquivo)
     return melhor[1] if melhor else None
 
 
-def escolher_album_da_pessoa(indice, pessoa, tamanho, quantidade):
-    """Como proc.escolher_album, mas só aceita a pasta com o nome inteiro da pessoa e prefere a do contrato."""
-
+def escolher_album_da_pessoa(indice, pessoa, tamanho, quantidade, albuns=None):
+    """Procura a pasta do álbum da pessoa nas Remessas/#ÁLBUNS PRONTOS ou na estrutura de Lote (<TAMANHO>/LAMINAS)."""
     nome = pessoa["nome"]
+    sge = str(pessoa.get("sge") or "").strip()
     contrato = pessoa.get("contrato") or ""
     melhor = None
     for remessa, pasta, mencoes in indice:
@@ -449,7 +532,7 @@ def escolher_album_da_pessoa(indice, pessoa, tamanho, quantidade):
             relativo = pasta.relative_to(remessa)
         except ValueError:
             relativo = pasta
-        if not capa_e_da_pessoa(nome, relativo):
+        if not capa_e_da_pessoa(nome, relativo, sge=sge):
             continue
         do_contrato = bool(contrato) and contrato in normalizar(str(relativo)).split()
         pasta_laminas, laminas, extras = proc.localizar_laminas(pasta, quantidade)
@@ -465,6 +548,33 @@ def escolher_album_da_pessoa(indice, pessoa, tamanho, quantidade):
         )
         if melhor is None or chave > melhor[0]:
             melhor = (chave, remessa, pasta, pasta_laminas, laminas, extras)
+
+    # Fallback: verifica também estrutura <TAMANHO>/LAMINAS/<NOME ou SGE>
+    if melhor is None and albuns is not None:
+        pasta_laminas_lote = albuns / tamanho / "LAMINAS"
+        if pasta_laminas_lote.is_dir():
+            try:
+                for sub in pasta_laminas_lote.iterdir():
+                    if not sub.is_dir():
+                        continue
+                    if not capa_e_da_pessoa(nome, sub.name, sge=sge):
+                        continue
+                    p_lam, laminas, extras = proc.localizar_laminas(sub, quantidade)
+                    qtd = len(laminas)
+                    chave = (
+                        True,
+                        max(proc.pontuacao_nome(nome, sub.name), 1),
+                        True,
+                        qtd == quantidade,
+                        qtd > 0,
+                        -abs(qtd - quantidade),
+                        -len(sub.parts),
+                    )
+                    if melhor is None or chave > melhor[0]:
+                        melhor = (chave, albuns / tamanho, sub, p_lam, laminas, extras)
+            except Exception:
+                pass
+
     if not melhor:
         return None
     _, remessa, pasta, pasta_laminas, laminas, extras = melhor
@@ -477,11 +587,11 @@ def escolher_album_da_pessoa(indice, pessoa, tamanho, quantidade):
     }
 
 
-def capa_do_album(albuns, nome, tamanho, escolha):
+def capa_do_album(albuns, nome, tamanho, escolha, sge=""):
     pasta = escolha["pasta_album"] if escolha else None
-    capa = procurar_capa_da_pessoa(albuns, nome, tamanho)
+    capa = procurar_capa_da_pessoa(albuns, nome, tamanho, sge=sge)
     if capa:
-        print(f"   capa: {capa}")
+        print(f"   capa ({tamanho}): {capa}")
         return capa
     if pasta:
         capa = proc.procurar_capa_antiga(pasta, tamanho)
@@ -492,25 +602,37 @@ def capa_do_album(albuns, nome, tamanho, escolha):
         ]
         capa = extras[0] if extras else None
     if capa:
-        print(f"   capa: {capa}")
+        print(f"   capa ({tamanho}): {capa}")
     return capa
 
 
 def localizar_albuns(pessoa, albuns, indice):
-    """Devolve os arquivos de cada tamanho, ou um resultado de falha."""
+    """Devolve os arquivos de cada tamanho (capa + lâminas JPG), ou um resultado detalhado de falha."""
+    tamanhos_alvo = list(pessoa.get("tamanhos") or [])
+    if not tamanhos_alvo:
+        for pl in (pessoa.get("planos") or []):
+            for t in tamanhos_do_plano(pl):
+                if t not in tamanhos_alvo:
+                    tamanhos_alvo.append(t)
 
-    if not pessoa["tamanhos"]:
-        return None, "plano não identificado", "faltou arquivo"
+    if not tamanhos_alvo:
+        return None, "plano/tamanho não identificado na Coluna F", "faltou arquivo"
 
+    sge = str(pessoa.get("sge") or "").strip()
     achados = []
     problemas = []
-    for tamanho in pessoa["tamanhos"]:
+    for tamanho in tamanhos_alvo:
         quantidade = proc.QUANTIDADE_LAMINAS[tamanho]
-        escolha = escolher_album_da_pessoa(indice, pessoa, tamanho, quantidade)
+        escolha = escolher_album_da_pessoa(indice, pessoa, tamanho, quantidade, albuns=albuns)
         laminas = list(escolha["laminas"]) if escolha else []
         if escolha:
-            print(f"   álbum {tamanho}: {escolha['pasta_album']}")
-        capa = capa_do_album(albuns, pessoa["nome"], tamanho, escolha)
+            print(f"   álbum {tamanho}: {escolha['pasta_album']} ({len(laminas)}/{quantidade} lâminas JPG)")
+        else:
+            print(f"   álbum {tamanho}: NÃO ENCONTRADO no servidor")
+        capa = capa_do_album(albuns, pessoa["nome"], tamanho, escolha, sge=sge)
+        if not capa:
+            print(f"   capa {tamanho}: NÃO ENCONTRADA no servidor")
+
         if not escolha:
             problemas.append(f"{tamanho}: álbum não encontrado")
         elif len(laminas) < quantidade:
@@ -524,9 +646,14 @@ def localizar_albuns(pessoa, albuns, indice):
             "tamanho": tamanho,
             "laminas": len(laminas),
             "esperadas": quantidade,
+            "tem_pasta_album": escolha is not None,
+            "tem_album": bool(escolha is not None and len(laminas) >= quantidade),
+            "pasta_album": str(escolha["pasta_album"]) if escolha else "",
+            "pasta_laminas": str(escolha["pasta_laminas"]) if escolha and escolha.get("pasta_laminas") else "",
             "capa": capa is not None,
+            "arquivo_capa": str(capa) if capa else "",
             "arquivos": arquivos,
-            "remessa": escolha["remessa"].name if escolha else "",
+            "remessa": escolha["remessa"].name if escolha and escolha.get("remessa") else "",
         })
 
     if problemas:
@@ -534,15 +661,155 @@ def localizar_albuns(pessoa, albuns, indice):
     return achados, "", ""
 
 
-def preparar_indice():
+def resolver_pasta_servidor(caminho_servidor=None):
+    """Localiza a pasta física do servidor de álbuns e capas (aceita caminho customizado da UI ou config)."""
+    candidatos = []
+    if caminho_servidor and str(caminho_servidor).strip():
+        candidatos.append(Path(str(caminho_servidor).strip()))
+    try:
+        cfg_org = carregar_json(PASTA / "organizador_config.json")
+        if cfg_org.get("origem"):
+            candidatos.append(Path(str(cfg_org["origem"]).strip()))
+    except Exception:
+        pass
+    candidatos.extend([
+        proc.SERVIDOR,
+        Path(r"D:\ÁLBUNS COLAÇÃO 2025.2"),
+        Path(r"\\192.168.0.29\hd-61\ÁLBUNS COLAÇÃO 2025.2"),
+        Path(r"\\192.168.0.29\hd-61\ÁLBUNS COLAÇÃO"),
+        Path(r"D:\ÁLBUNS COLAÇÃO"),
+        PASTA.parent / "servidor_albuns_colacao",
+        PASTA / "servidor_albuns_colacao",
+    ])
+    vistos = set()
+    for cand in candidatos:
+        try:
+            chave = str(cand)
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            if cand.exists() and cand.is_dir():
+                return cand
+        except Exception:
+            continue
+    alvo_erro = candidatos[0] if candidatos else proc.SERVIDOR
+    raise FileNotFoundError(f"Servidor de álbuns/capas não encontrado: {alvo_erro}")
+
+
+def preparar_indice(caminho_servidor=None):
     setattr(proc.listar_arquivos_capas, "cache", None)
-    albuns = proc.encontrar_albuns_colacao()
+    pasta_srv = resolver_pasta_servidor(caminho_servidor)
+    albuns = proc.encontrar_albuns_colacao(pasta_srv)
     if albuns is None:
-        raise FileNotFoundError(f"Servidor não encontrado: {proc.SERVIDOR}")
+        raise FileNotFoundError(f"Servidor não encontrado: {pasta_srv}")
     remessas = proc.encontrar_remessas(albuns)
     if not remessas:
         raise FileNotFoundError(f"Nenhuma remessa em {albuns}")
     return albuns, proc.indexar_pastas_album(remessas)
+
+
+def conferir_pessoa_no_servidor(pessoa, albuns, indice):
+    """
+    Executa a conferência real de CAPA e ÁLBUM no servidor para um formando,
+    retornando separadamente se TEM ÁLBUM (e quantas lâminas JPG) e se TEM CAPA (e o caminho).
+    """
+    achados, msg, resultado = localizar_albuns(pessoa, albuns, indice)
+    itens = []
+    for it in (achados or []):
+        itens.append({
+            "tamanho": it["tamanho"],
+            "laminasEncontradas": it["laminas"],
+            "laminasEsperadas": it["esperadas"],
+            "temPastaAlbum": bool(it.get("tem_pasta_album")),
+            "temAlbum": bool(it.get("tem_album")),
+            "pastaAlbum": it.get("pasta_album") or "",
+            "pastaLaminas": it.get("pasta_laminas") or "",
+            "temCapa": bool(it.get("capa")),
+            "arquivoCapa": it.get("arquivo_capa") or "",
+            "remessa": it.get("remessa") or "",
+        })
+
+    if not itens:
+        return {
+            "sge": str(pessoa.get("sge") or ""),
+            "nome": pessoa.get("nome") or "",
+            "temAlbum": False,
+            "temPastaAlbum": False,
+            "temCapa": False,
+            "completo": False,
+            "resumoAlbum": "✖ Plano s/ tamanho",
+            "resumoCapa": "✖ Plano s/ tamanho",
+            "resumoGeral": f"⚠ {msg or 'Plano não identificado'}",
+            "mensagem": msg or "Plano não identificado",
+            "pastaAlbum": "",
+            "arquivoCapa": "",
+            "itens": [],
+        }
+
+    tem_album = all(i["temAlbum"] for i in itens)
+    tem_pasta = any(i["temPastaAlbum"] for i in itens)
+    tem_capa = all(i["temCapa"] for i in itens)
+    completo = bool(tem_album and tem_capa)
+
+    partes_alb = []
+    for i in itens:
+        if i["temAlbum"]:
+            partes_alb.append(f"{i['tamanho']}: {i['laminasEncontradas']}/{i['laminasEsperadas']} JPG")
+        elif i["temPastaAlbum"]:
+            partes_alb.append(f"{i['tamanho']}: INCOMPLETO ({i['laminasEncontradas']}/{i['laminasEsperadas']} JPG)")
+        else:
+            partes_alb.append(f"{i['tamanho']}: NÃO")
+
+    if tem_album:
+        resumo_album = "✔ SIM (" + ", ".join(partes_alb) + ")"
+    elif tem_pasta:
+        resumo_album = "⚠ " + ", ".join(partes_alb)
+    else:
+        resumo_album = "✖ SEM ÁLBUM (" + ", ".join(partes_alb) + ")"
+
+    if tem_capa:
+        nomes_capas = [Path(i["arquivoCapa"]).name for i in itens if i.get("arquivoCapa")]
+        det_c = nomes_capas[0] if len(nomes_capas) == 1 else f"{len(nomes_capas)} capas"
+        resumo_capa = f"✔ SIM ({det_c})"
+    elif any(i["temCapa"] for i in itens):
+        partes_c = [f"{i['tamanho']}: {'SIM' if i['temCapa'] else 'NÃO'}" for i in itens]
+        resumo_capa = "⚠ PARCIAL (" + ", ".join(partes_c) + ")"
+    else:
+        resumo_capa = "✖ SEM CAPA"
+
+    if completo:
+        resumo_geral = f"✔ COMPLETO ({', '.join(partes_alb)} + Capa OK)"
+    elif tem_album and not tem_capa:
+        resumo_geral = f"⚠ SÓ ÁLBUM — FALTA CAPA ({', '.join(partes_alb)})"
+    elif not tem_album and tem_capa:
+        if tem_pasta:
+            resumo_geral = f"⚠ CAPA OK — FALTAM LÂMINAS ({', '.join(partes_alb)})"
+        else:
+            resumo_geral = "⚠ SÓ CAPA — FALTA ÁLBUM NO SERVIDOR"
+    else:
+        if tem_pasta:
+            resumo_geral = f"✖ INCOMPLETO ({', '.join(partes_alb)} e Sem Capa)"
+        else:
+            resumo_geral = "✖ SEM ÁLBUM E SEM CAPA NO SERVIDOR"
+
+    primeira_pasta = next((i["pastaAlbum"] for i in itens if i.get("pastaAlbum")), "")
+    primeira_capa = next((i["arquivoCapa"] for i in itens if i.get("arquivoCapa")), "")
+
+    return {
+        "sge": str(pessoa.get("sge") or ""),
+        "nome": pessoa.get("nome") or "",
+        "temAlbum": tem_album,
+        "temPastaAlbum": tem_pasta,
+        "temCapa": tem_capa,
+        "completo": completo,
+        "resumoAlbum": resumo_album,
+        "resumoCapa": resumo_capa,
+        "resumoGeral": resumo_geral,
+        "mensagem": msg,
+        "pastaAlbum": primeira_pasta,
+        "arquivoCapa": primeira_capa,
+        "itens": itens,
+    }
 
 
 def texto_jpg(achados):
@@ -1632,9 +1899,12 @@ def analisar_argumentos():
     parser = argparse.ArgumentParser(description="Envia o álbum diagramado para aprovação no MaisBook")
     parser.add_argument("--sge", help="processa só este código")
     parser.add_argument("--limite", type=int)
+    parser.add_argument("--origem", help="pasta raiz do servidor onde estão CAPAS e as REMESSAS de álbuns")
     parser.add_argument("--simular", action="store_true", help="procura e abre o cliente, sem pasta, sem arquivo e sem e-mail")
     parser.add_argument("--continuar", action="store_true", help="retoma quem ainda não foi enviado")
     parser.add_argument("--listar", action="store_true", help="só lista quem está com STATUS DIAGRAMADO e o status da Coluna M (CAPA)")
+    parser.add_argument("--conferir-servidor", action="store_true", help="confere fisicamente no servidor se cada formando tem CAPA e ÁLBUM completos")
+    parser.add_argument("--conferir-json", help="JSON de entrada ou caminho para conferir lista de alunos no servidor e devolver JSON")
     parser.add_argument("--vigia", action="store_true", help="monitora continuamente a planilha e envia automaticamente quem tiver STATUS=DIAGRAMADO e Coluna M (CAPA) liberada")
     parser.add_argument("--intervalo", type=int, default=60, help="segundos entre cada verificação no modo --vigia (padrão: 60)")
     parser.add_argument("--ignorar-coluna-m", action="store_true", help="permite enviar todos os DIAGRAMADO mesmo se a Coluna M (CAPA) estiver vazia")
@@ -1728,7 +1998,7 @@ def executar_rodada(args, em_vigia=False):
     print("FASE 1 — CONFERÊNCIA DE SEGURANÇA NO SERVIDOR (capa e lâminas JPG)")
     print("(Mesmo com OK na Coluna M, confere se capa e álbum estão completos no servidor antes de enviar)")
     print("=" * 70)
-    albuns, indice = preparar_indice()
+    albuns, indice = preparar_indice(getattr(args, "origem", None))
     prontos = []
     fora = []
     linhas = []
@@ -1890,6 +2160,63 @@ def executar_rodada(args, em_vigia=False):
     return enviados_rodada
 
 
+def executar_conferencia_servidor_cli(args):
+    """Executa apenas a conferência física de CAPA e ÁLBUM no servidor (sem abrir navegador)."""
+    albuns, indice = preparar_indice(getattr(args, "origem", None))
+    pessoas = ler_diagramados()
+    if args.sge:
+        codigo = limpar_sge(args.sge)
+        pessoas = [p for p in pessoas if p["sge"] == codigo]
+    if args.limite:
+        pessoas = pessoas[: args.limite]
+
+    print("=" * 78)
+    print(f"CONFERÊNCIA FÍSICA NO SERVIDOR: {albuns}")
+    print(f"Total de formandos verificados: {len(pessoas)}")
+    print("=" * 78)
+
+    completos = 0
+    so_album = 0
+    so_capa = 0
+    sem_nada = 0
+    resultados = {}
+
+    for p in pessoas:
+        info = conferir_pessoa_no_servidor(p, albuns, indice)
+        resultados[p["sge"]] = info
+        col_m = p.get("capa_planilha") or "(vazia)"
+        print(
+            f"Linha {p['linha']} | SGE {p['sge']} — {p['nome']} | Col.M='{col_m}'\n"
+            f"   -> ÁLBUM: {info['resumoAlbum']}\n"
+            f"   -> CAPA : {info['resumoCapa']}\n"
+            f"   -> GERAL: {info['resumoGeral']}"
+        )
+        if info["completo"]:
+            completos += 1
+        elif info["temAlbum"] and not info["temCapa"]:
+            so_album += 1
+        elif not info["temAlbum"] and info["temCapa"]:
+            so_capa += 1
+        else:
+            sem_nada += 1
+
+    print("=" * 78)
+    print(
+        f"RESUMO DA CONFERÊNCIA NO SERVIDOR:\n"
+        f"  ✔ Completos (Álbum + Capa): {completos}\n"
+        f"  ⚠ Só Álbum (Falta Capa)   : {so_album}\n"
+        f"  ⚠ Só Capa (Falta Álbum)   : {so_capa}\n"
+        f"  ✖ Sem Álbum e Sem Capa    : {sem_nada}"
+    )
+    print("=" * 78)
+    salvar_json(PASTA / "conferencia_servidor.json", {
+        "servidor": str(albuns),
+        "verificadoEm": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
+        "resultados": resultados,
+    })
+    return resultados
+
+
 def main():
     args = analisar_argumentos()
     if getattr(args, "gravar_celulas", None):
@@ -1902,6 +2229,37 @@ def main():
             webhook_url=dados.get("webhook_url") or "",
             usar_navegador=bool(dados.get("usar_navegador", False)),
         )
+        return
+    if getattr(args, "conferir_json", None):
+        entrada = args.conferir_json
+        if Path(entrada).is_file():
+            payload = json.loads(Path(entrada).read_text(encoding="utf-8"))
+        else:
+            payload = json.loads(entrada)
+        origem_srv = payload.get("origem") or getattr(args, "origem", None)
+        albuns, indice = preparar_indice(origem_srv)
+        alunos_in = payload.get("alunos") or []
+        saida = {}
+        for a in alunos_in:
+            tamanhos = a.get("tamanhos") or tamanhos_do_plano(a.get("tamanho") or "")
+            pessoa = {
+                "nome": a.get("nome") or "",
+                "sge": str(a.get("sge") or ""),
+                "contrato": so_contrato(a.get("contrato") or a.get("cont") or ""),
+                "tamanhos": tamanhos,
+                "planos": [a.get("tamanho")] if a.get("tamanho") else [],
+            }
+            saida[pessoa["sge"] or str(a.get("id") or "")] = conferir_pessoa_no_servidor(pessoa, albuns, indice)
+        resposta_json = {
+            "ok": True,
+            "servidor": str(albuns),
+            "verificadoEm": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
+            "resultados": saida,
+        }
+        print("JSON_CONFERENCIA_START:" + json.dumps(resposta_json, ensure_ascii=False))
+        return
+    if getattr(args, "conferir_servidor", False):
+        executar_conferencia_servidor_cli(args)
         return
     if args.listar or not args.vigia:
         executar_rodada(args, em_vigia=False)
