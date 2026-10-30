@@ -1521,12 +1521,16 @@ def gravar_edicoes_planilha(aba, linha_num, celulas_dict, sge="", webhook_url=""
                             raise RuntimeError(
                                 f"Linha {linha_num} está oculta por filtro no Google Sheets (cursor foi para {celula_atual})"
                             )
-                        barra_formula.click()
-                        plan_pag.keyboard.press("Control+A")
-                        plan_pag.keyboard.press("Backspace")
                         if val:
+                            barra_formula.click()
+                            plan_pag.keyboard.press("Control+A")
+                            plan_pag.keyboard.press("Backspace")
                             plan_pag.keyboard.type(val, delay=15)
-                        plan_pag.keyboard.press("Enter")
+                            plan_pag.keyboard.press("Enter")
+                        else:
+                            plan_pag.keyboard.press("Backspace")
+                            plan_pag.keyboard.press("Delete")
+                            plan_pag.keyboard.press("Enter")
                         plan_pag.wait_for_timeout(800)
                         gravadas_ok.append(ref_celula)
                     # Aguarda o salvamento XHR do Google Sheets no Drive antes de fechar
