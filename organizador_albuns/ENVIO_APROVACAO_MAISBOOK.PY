@@ -38,10 +38,39 @@ from urllib.parse import quote
 
 PASTA = Path(__file__).resolve().parent
 PASTA_MB = PASTA.parent / "cpf_maisbook"
-proc = SourceFileLoader("procura_servidor", str(PASTA / "PROCUARAÇAO_SERVIDOR.PY")).load_module()
-mb = SourceFileLoader("cpf_maisbook", str(PASTA_MB / "CPF_MAISBOOK.PY")).load_module()
-base = mb.base
-nomes_batem = mb.nomes_batem
+_ARQ_PROC = PASTA / "PROCUARAÇAO_SERVIDOR.PY"
+if not _ARQ_PROC.exists():
+    _ARQ_PROC = PASTA / "PROCUARACAO_SERVIDOR.PY"
+proc = SourceFileLoader("procura_servidor", str(_ARQ_PROC)).load_module()
+
+_ARQ_MB = PASTA_MB / "CPF_MAISBOOK.PY"
+if _ARQ_MB.exists():
+    mb = SourceFileLoader("cpf_maisbook", str(_ARQ_MB)).load_module()
+    base = mb.base
+    nomes_batem = mb.nomes_batem
+else:
+    class _FallbackBase:
+        @staticmethod
+        def ir(pagina, url, timeout=20000):
+            pagina.goto(url, wait_until="domcontentloaded", timeout=timeout)
+        @staticmethod
+        def texto_da_tela(pagina):
+            try:
+                return proc.normalizar(pagina.inner_text("body"))
+            except Exception:
+                return ""
+    class _FallbackMB:
+        PERFIL = PASTA / "maisbook_perfil"
+        @staticmethod
+        def carregar_config():
+            return {"url_maisbook": "https://www.maisbook.com.br/admin/index.php?pagina=clientes", "timeout_ms": 20000}
+        @staticmethod
+        def login_maisbook(pagina, timeout=20000):
+            return False
+    mb = _FallbackMB()
+    base = _FallbackBase()
+    def nomes_batem(a, b):
+        return proc.normalizar(a) == proc.normalizar(b)
 
 PLANILHA_LINK = "https://docs.google.com/spreadsheets/d/1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0/edit?usp=sharing"
 PLANILHA = PASTA / "planilha_envio_aprovacao.xlsx"
@@ -467,6 +496,7 @@ def localizar_albuns(pessoa, albuns, indice):
 
 
 def preparar_indice():
+    setattr(proc.listar_arquivos_capas, "cache", None)
     albuns = proc.encontrar_albuns_colacao()
     if albuns is None:
         raise FileNotFoundError(f"Servidor não encontrado: {proc.SERVIDOR}")
