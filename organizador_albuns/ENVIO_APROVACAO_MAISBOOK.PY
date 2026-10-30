@@ -1337,17 +1337,21 @@ def atualizar_status_planilha(contexto, pessoa, novo_status="Aguardando Aprovaç
             criou_aba = True
             plan_pag.goto(PLANILHA_LINK, wait_until="domcontentloaded", timeout=60000)
 
-        caixa = plan_pag.locator("#t-name-box")
-        caixa.first.wait_for(state="visible", timeout=25000)
-        caixa.first.click()
-        caixa.first.fill("'" + aba.replace("'", "''") + "'!" + ref_celula)
-        caixa.first.press("Enter")
-        plan_pag.wait_for_timeout(500)
+        plan_pag.wait_for_function(
+            "() => { const el = document.querySelector('#t-name-box'); return el && !el.hasAttribute('disabled'); }",
+            timeout=30000,
+        )
+        caixa = plan_pag.locator("#t-name-box").first
+        caixa.click()
+        caixa.fill("'" + aba.replace("'", "''") + "'!" + ref_celula)
+        caixa.press("Enter")
+        plan_pag.wait_for_timeout(700)
 
+        barra_formula = plan_pag.locator("#t-formula-bar-input").first
         try:
             atual_barra = (
-                plan_pag.locator("#t-formula-bar-input")
-                .first.inner_text(timeout=3000)
+                barra_formula
+                .inner_text(timeout=3000)
                 .replace("\ufeff", "")
                 .replace("\u200b", "")
                 .strip()
@@ -1361,10 +1365,12 @@ def atualizar_status_planilha(contexto, pessoa, novo_status="Aguardando Aprovaç
             print(f"    planilha: Coluna K ({ref_celula}) já está em '{atual_barra}' (não retrocede)")
             return f"Coluna K mantida em {atual_barra}"
 
-        plan_pag.keyboard.type(novo_status, delay=10)
-        plan_pag.keyboard.press("Delete")
+        barra_formula.click()
+        plan_pag.keyboard.press("Control+A")
+        plan_pag.keyboard.press("Backspace")
+        plan_pag.keyboard.type(novo_status, delay=15)
         plan_pag.keyboard.press("Enter")
-        plan_pag.wait_for_timeout(700)
+        plan_pag.wait_for_timeout(2500)
         print(f"    planilha: Coluna K ({ref_celula}) atualizada para '{novo_status}'")
         try:
             gravar_edicoes_planilha(
@@ -1389,13 +1395,13 @@ def atualizar_status_planilha(contexto, pessoa, novo_status="Aguardando Aprovaç
                 pass
 
 
-def gravar_edicoes_planilha(aba, linha_num, celulas_dict, sge="", webhook_url="", usar_navegador=False):
+def gravar_edicoes_planilha(aba, linha_num, celulas_dict, sge="", webhook_url="", usar_navegador=True):
     """
     Reescreve em tempo real uma ou mais células de uma linha da planilha:
       1. Salva no overlay instantâneo (edicoes_planilha_local.json)
       2. Atualiza todas as cópias locais .xlsx (planilha_envio_aprovacao.xlsx, planilha_organizador.xlsx, baixa_planilha.xlsx)
       3. Envia via Webhook Google Apps Script (se configurado)
-      4. Opcionalmente abre/usa o Chrome autenticado (Playwright) para digitar direto nas células do Google Sheets
+      4. Abre/usa Chromium em background (Playwright) para gravar direto nas células do Google Sheets online
     """
     import urllib.request
     from openpyxl.utils import column_index_from_string, get_column_letter
@@ -1479,45 +1485,60 @@ def gravar_edicoes_planilha(aba, linha_num, celulas_dict, sge="", webhook_url=""
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
-                 resp.read()
+                resp.read()
             mensagens.append("Google Sheets atualizado via Webhook Apps Script")
         except Exception as e:
             mensagens.append(f"Aviso Webhook: {e}")
 
-    # 4. Se solicitado usar o navegador Chrome autenticado (Playwright)
+    # 4. Grava direto nas células do Google Sheets online via Playwright (headless em background)
     if usar_navegador:
         try:
             from playwright.sync_api import sync_playwright
 
             with sync_playwright() as p:
-                contexto = abrir_navegador(p)
-                plan_pag = contexto.pages[0] if contexto.pages else contexto.new_page()
+                try:
+                    navegador = p.chromium.launch(headless=True, channel="chrome")
+                except Exception:
+                    navegador = p.chromium.launch(headless=True)
+                plan_pag = navegador.new_page()
                 try:
                     plan_pag.goto(PLANILHA_LINK, wait_until="domcontentloaded", timeout=60000)
+                    plan_pag.wait_for_function(
+                        "() => { const el = document.querySelector('#t-name-box'); return el && !el.hasAttribute('disabled'); }",
+                        timeout=30000,
+                    )
                     caixa = plan_pag.locator("#t-name-box").first
-                    caixa.wait_for(state="visible", timeout=25000)
+                    barra_formula = plan_pag.locator("#t-formula-bar-input").first
+                    gravadas_ok = []
                     for letra, val in normalizadas.items():
-                        ref_celula = f"{letra}{linha_num}"
+                        ref_celula = f"{letra.upper()}{linha_num}"
                         caixa.click()
                         caixa.fill("'" + aba.replace("'", "''") + "'!" + ref_celula)
                         caixa.press("Enter")
-                        plan_pag.wait_for_timeout(450)
+                        plan_pag.wait_for_timeout(600)
+                        celula_atual = (caixa.input_value() or "").strip().upper()
+                        if celula_atual != ref_celula:
+                            raise RuntimeError(
+                                f"Linha {linha_num} está oculta por filtro no Google Sheets (cursor foi para {celula_atual})"
+                            )
+                        barra_formula.click()
+                        plan_pag.keyboard.press("Control+A")
+                        plan_pag.keyboard.press("Backspace")
                         if val:
-                            plan_pag.keyboard.type(val, delay=10)
-                            plan_pag.keyboard.press("Delete")
-                            plan_pag.keyboard.press("Enter")
-                        else:
-                            plan_pag.keyboard.press("Delete")
-                            plan_pag.keyboard.press("Enter")
-                        plan_pag.wait_for_timeout(550)
-                    mensagens.append("Google Sheets atualizado via Navegador Chrome")
+                            plan_pag.keyboard.type(val, delay=15)
+                        plan_pag.keyboard.press("Enter")
+                        plan_pag.wait_for_timeout(800)
+                        gravadas_ok.append(ref_celula)
+                    # Aguarda o salvamento XHR do Google Sheets no Drive antes de fechar
+                    plan_pag.wait_for_timeout(2500)
+                    mensagens.append(f"Google Sheets Online atualizado ({', '.join(gravadas_ok)})")
                 finally:
                     try:
-                        contexto.close()
+                        navegador.close()
                     except Exception:
                         pass
         except Exception as e:
-            mensagens.append(f"Aviso Chrome: {e}")
+            mensagens.append(f"Aviso Google Sheets Online: {e}")
 
     resumo = " | ".join(mensagens)
     print("REESCRITA PLANILHA:", resumo)

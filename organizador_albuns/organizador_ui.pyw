@@ -595,7 +595,7 @@ class JanelaOrganizador:
         self.envio_atualizar_planilha = tk.BooleanVar(value=cfg.get("envio_atualizar_planilha", True))
         self.envio_baixa_sge = tk.BooleanVar(value=cfg.get("envio_baixa_sge", True))
         self.webhook_apps_script = tk.StringVar(value=cfg.get("webhook_apps_script", ""))
-        self.gravar_via_chrome = tk.BooleanVar(value=cfg.get("gravar_via_chrome", False))
+        self.gravar_via_chrome = tk.BooleanVar(value=cfg.get("gravar_via_chrome", True))
         self.autosync_ativo = tk.BooleanVar(value=cfg.get("autosync_ativo", False))
 
         # Filtros e controles do Dashboard

@@ -21,6 +21,8 @@
     "POSTERS"
   ],
   "envio_intervalo": 60,
+  "envio_exigir_coluna_m": true,
   "envio_atualizar_planilha": true,
-  "envio_baixa_sge": true
+  "envio_baixa_sge": true,
+  "gravar_via_chrome": true
 }
