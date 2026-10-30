@@ -92,7 +92,7 @@ def salvar_json(arquivo, dados):
 
 
 def salvar_relatorio(linhas):
-    campos = ["NOME", "SGE", "CONTRATO", "CODIGO", "TAMANHOS", "JPG", "CAPA", "RESULTADO", "MENSAGEM", "AVISO"]
+    campos = ["NOME", "SGE", "CONTRATO", "CODIGO", "COLUNA_M_CAPA", "TAMANHOS", "JPG", "CAPA", "RESULTADO", "MENSAGEM", "AVISO"]
     try:
         with RELATORIO.open("w", newline="", encoding="utf-8-sig") as arquivo:
             escritor = csv.DictWriter(arquivo, fieldnames=campos, delimiter=";")
@@ -120,6 +120,7 @@ def tirar_print(pagina, nome):
 # ==========================================================
 
 COLUNA_CODIGO = 9
+COLUNA_CAPA_PADRAO = 13  # Coluna M (CAPA)
 NOMES_CABECALHO_CLIENTE = (
     "nome",
     "nome completo",
@@ -131,6 +132,32 @@ NOMES_CABECALHO_CLIENTE = (
     "formando",
 )
 
+BLOQUEIOS_COLUNA_M = {
+    "",
+    "em diagramacao",
+    "em producao",
+    "aguardando",
+    "aguardando capa",
+    "aguardando foto",
+    "pendente",
+    "nao",
+    "sem capa",
+    "sem album",
+    "falta",
+    "faltando",
+}
+
+
+def capa_liberada_na_planilha(valor):
+    """
+    Verifica se a Coluna M (CAPA) recebeu o OK para enviar (ex.: DIAGRAMADO, OK, CAPA ENTREGUE, SIM, PRONTO).
+    Se estiver vazia ou em 'EM DIAGRAMAÇÃO' / 'EM PRODUÇÃO', retorna False.
+    """
+    texto = normalizar(valor)
+    if not texto or texto in BLOQUEIOS_COLUNA_M:
+        return False
+    return True
+
 
 def limpar_sge(valor):
     texto = str(valor or "").strip()
@@ -141,7 +168,7 @@ def limpar_sge(valor):
 
 
 def cabecalho_da_folha(folha):
-    """Acha a linha que tem NOME/CLIENTE, SGE, TAMANHO e STATUS juntos, priorizando a coluna de nome preenchida."""
+    """Acha a linha que tem NOME/CLIENTE, SGE, TAMANHO, STATUS e CAPA (Coluna M) juntos."""
 
     linhas_amostra = list(folha.iter_rows(max_row=80, values_only=True))
     for numero, linha in enumerate(linhas_amostra[:40], start=1):
@@ -172,11 +199,21 @@ def cabecalho_da_folha(folha):
 
         contrato = next((i + 1 for i, texto in enumerate(textos) if texto in ("cont", "contrato", "ctt")), 0)
         codigo = textos.index("maisbook") + 1 if "maisbook" in textos else COLUNA_CODIGO
+        status_idx = textos.index("status") + 1
+        # A Coluna M (13) tem o título CAPA (depois da coluna STATUS)
+        capa_col = next(
+            (i + 1 for i, texto in enumerate(textos) if texto == "capa" and (i + 1) > status_idx),
+            0,
+        )
+        if not capa_col:
+            capa_col = textos.index("capa") + 1 if "capa" in textos else COLUNA_CAPA_PADRAO
+
         return numero, {
             "nome": melhor_nome,
             "sge": textos.index("sge") + 1,
             "tamanho": textos.index("tamanho") + 1,
-            "status": textos.index("status") + 1,
+            "status": status_idx,
+            "capa": capa_col,
             "contrato": contrato,
             "codigo": codigo,
         }
@@ -241,6 +278,7 @@ def ler_diagramados():
         nome = celula(linha, colunas["nome"]).strip()
         sge = limpar_sge(celula(linha, colunas["sge"]))
         plano = celula(linha, colunas["tamanho"]).strip()
+        capa_plan = celula(linha, colunas.get("capa") or COLUNA_CAPA_PADRAO).strip()
         if not nome or not re.fullmatch(r"\d+", sge):
             continue
         pessoa = pessoas.setdefault(sge, {
@@ -251,11 +289,18 @@ def ler_diagramados():
             "linha": numero,
             "aba": nome_aba,
             "col_status": colunas["status"],
+            "col_capa": colunas.get("capa") or COLUNA_CAPA_PADRAO,
+            "capa_planilha": capa_plan,
+            "liberado_coluna_m": capa_liberada_na_planilha(capa_plan),
             "planos": [],
             "tamanhos": [],
             "avisos": [],
             "duplicados": [],
         })
+        if capa_plan and not pessoa.get("capa_planilha"):
+            pessoa["capa_planilha"] = capa_plan
+        if capa_liberada_na_planilha(capa_plan):
+            pessoa["liberado_coluna_m"] = True
         if plano and plano not in pessoa["planos"]:
             pessoa["planos"].append(plano)
         for tamanho in tamanhos_do_plano(plano):
@@ -268,7 +313,12 @@ def ler_diagramados():
             pessoa["avisos"].append("sem código MaisBook na coluna I — pesquisado pelo SGE")
         if not pessoa["contrato"]:
             pessoa["avisos"].append("sem contrato na planilha — conferido pelo SGE")
-    print(f"Aba: {nome_aba} (coluna Nome={colunas['nome']}, SGE={colunas['sge']}, Status={colunas['status']}) | STATUS DIAGRAMADO: {len(lista)}")
+    qtd_liberados_m = sum(1 for p in lista if p.get("liberado_coluna_m"))
+    qtd_aguardando_m = len(lista) - qtd_liberados_m
+    print(
+        f"Aba: {nome_aba} | STATUS DIAGRAMADO (Coluna K): {len(lista)} | "
+        f"Liberados na Coluna M (CAPA): {qtd_liberados_m} | Aguardando OK na Coluna M: {qtd_aguardando_m}"
+    )
     return lista
 
 
@@ -1325,6 +1375,7 @@ def linha_relatorio(pessoa, achados, resultado, mensagem):
         "SGE": pessoa["sge"],
         "CONTRATO": pessoa.get("contrato", ""),
         "CODIGO": pessoa.get("codigo", ""),
+        "COLUNA_M_CAPA": pessoa.get("capa_planilha") or "(vazia)",
         "TAMANHOS": ", ".join(pessoa["tamanhos"]),
         "JPG": texto_jpg(achados),
         "CAPA": texto_capa(achados),
@@ -1344,9 +1395,10 @@ def analisar_argumentos():
     parser.add_argument("--limite", type=int)
     parser.add_argument("--simular", action="store_true", help="procura e abre o cliente, sem pasta, sem arquivo e sem e-mail")
     parser.add_argument("--continuar", action="store_true", help="retoma quem ainda não foi enviado")
-    parser.add_argument("--listar", action="store_true", help="só lista quem está com STATUS DIAGRAMADO")
-    parser.add_argument("--vigia", action="store_true", help="monitora continuamente a planilha e envia automaticamente quem entrar como DIAGRAMADO")
+    parser.add_argument("--listar", action="store_true", help="só lista quem está com STATUS DIAGRAMADO e o status da Coluna M (CAPA)")
+    parser.add_argument("--vigia", action="store_true", help="monitora continuamente a planilha e envia automaticamente quem tiver STATUS=DIAGRAMADO e Coluna M (CAPA) liberada")
     parser.add_argument("--intervalo", type=int, default=60, help="segundos entre cada verificação no modo --vigia (padrão: 60)")
+    parser.add_argument("--ignorar-coluna-m", action="store_true", help="permite enviar todos os DIAGRAMADO mesmo se a Coluna M (CAPA) estiver vazia")
     parser.add_argument("--sem-planilha", action="store_true", help="não atualiza a Coluna K para Aguardando Aprovação após enviar")
     parser.add_argument("--sem-sge", action="store_true", help="não dá baixa automática no SGE (Enviado para Aprovação) após enviar")
     return parser.parse_args()
@@ -1362,20 +1414,57 @@ def executar_rodada(args, em_vigia=False):
             print(f"O código {args.sge} não está com STATUS DIAGRAMADO.")
             return 0
     if args.listar:
+        liberados = 0
+        aguardando_m = 0
         for pessoa in pessoas:
-            marca = "JÁ ENVIADO" if pessoa["sge"] in feitos else "PENDENTE"
-            print(f"linha {pessoa['linha']}: SGE {pessoa['sge']} — {pessoa['nome']} | "
-                  f"código MB {pessoa.get('codigo') or '-'} | "
-                  f"{', '.join(pessoa['tamanhos']) or '(plano não identificado)'} | {marca}")
-        print(f"\nTotal com STATUS DIAGRAMADO: {len(pessoas)}")
+            col_m = pessoa.get("capa_planilha") or "(vazia)"
+            if pessoa["sge"] in feitos:
+                marca = "JÁ ENVIADO"
+            elif pessoa.get("liberado_coluna_m"):
+                marca = f"LIBERADO PELA COLUNA M (CAPA='{col_m}') — VAI CONFERIR NO SERVIDOR E ENVIAR"
+                liberados += 1
+            else:
+                marca = f"AGUARDANDO OK NA COLUNA M (CAPA={col_m})"
+                aguardando_m += 1
+            print(
+                f"linha {pessoa['linha']}: SGE {pessoa['sge']} — {pessoa['nome']} | "
+                f"código MB {pessoa.get('codigo') or '-'} | "
+                f"{', '.join(pessoa['tamanhos']) or '(plano não identificado)'} | {marca}"
+            )
+        print(
+            f"\nTotal com STATUS DIAGRAMADO (Coluna K): {len(pessoas)} | "
+            f"Liberados na Coluna M (CAPA) pendentes: {liberados} | "
+            f"Retidos sem OK na Coluna M: {aguardando_m}"
+        )
         return len(pessoas)
 
     ja_enviadas = [pessoa for pessoa in pessoas if pessoa["sge"] in feitos]
     pessoas = [pessoa for pessoa in pessoas if pessoa["sge"] not in feitos]
     if ja_enviadas:
         print(f"Já enviadas, sem mandar de novo ({len(ja_enviadas)}): {', '.join(pessoa['sge'] for pessoa in ja_enviadas)}")
+
+    # REGRA COLUNA M (CAPA): Só envia realmente quem estiver com a Coluna M (CAPA) marcada (ex.: DIAGRAMADO / OK / CAPA ENTREGUE)
+    # a menos que o usuário passe --ignorar-coluna-m ou tenha pedido um --sge específico.
+    exigir_col_m = not getattr(args, "ignorar_coluna_m", False)
+    retidos_coluna_m = []
+    if exigir_col_m:
+        liberados_m = []
+        for pessoa in pessoas:
+            if pessoa.get("liberado_coluna_m"):
+                liberados_m.append(pessoa)
+            else:
+                retidos_coluna_m.append(pessoa)
+        pessoas = liberados_m
+
+    if retidos_coluna_m:
+        print(
+            f"Retidos aguardando OK na Coluna M (CAPA vazia/em produção) ({len(retidos_coluna_m)}): "
+            + ", ".join(f"{p['nome']} ({p['sge']})" for p in retidos_coluna_m[:10])
+            + (f" ... e mais {len(retidos_coluna_m) - 10}" if len(retidos_coluna_m) > 10 else "")
+        )
+
     if args.continuar:
-        print(f"Continuando com {len(pessoas)} pessoa(s).")
+        print(f"Continuando com {len(pessoas)} pessoa(s) liberada(s) na Coluna M (CAPA).")
     if args.limite:
         pessoas = pessoas[: args.limite]
 
@@ -1384,16 +1473,20 @@ def executar_rodada(args, em_vigia=False):
         "ENVIO DE ÁLBUM PARA APROVAÇÃO —",
         "SIMULAÇÃO" if args.simular else ("MODO VIGIA CONTÍNUO" if em_vigia else "ENVIO REAL"),
     )
-    print(f"Pessoas pendentes com STATUS DIAGRAMADO: {len(pessoas)}")
+    print(
+        f"Liberados na Coluna M (CAPA) para conferir no servidor e enviar: {len(pessoas)} "
+        f"| Aguardando OK na Coluna M: {len(retidos_coluna_m)}"
+    )
     print("=" * 70)
     if not pessoas:
-        print("Nenhuma pessoa pendente para processar agora.")
+        print("Nenhuma pessoa liberada na Coluna M (CAPA) para processar agora.")
         return 0
 
     if not em_vigia:
         PARAR.unlink(missing_ok=True)
     print("\n" + "=" * 70)
-    print("FASE 1 — SERVIDOR (capa e álbum)")
+    print("FASE 1 — CONFERÊNCIA DE SEGURANÇA NO SERVIDOR (capa e lâminas JPG)")
+    print("(Mesmo com OK na Coluna M, confere se capa e álbum estão completos no servidor antes de enviar)")
     print("=" * 70)
     albuns, indice = preparar_indice()
     prontos = []
@@ -1403,27 +1496,37 @@ def executar_rodada(args, em_vigia=False):
         if pediu_parar():
             print("\nPARADO A PEDIDO antes de procurar o restante.")
             break
-        print(f"\n{pessoa['nome']} — SGE {pessoa['sge']} — {', '.join(pessoa['tamanhos']) or pessoa['planos']}")
+        col_m_txt = pessoa.get("capa_planilha") or "OK"
+        print(
+            f"\n{pessoa['nome']} — SGE {pessoa['sge']} — Coluna M (CAPA)='{col_m_txt}' — "
+            f"{', '.join(pessoa['tamanhos']) or pessoa['planos']}"
+        )
         achados, mensagem, resultado = localizar_albuns(pessoa, albuns, indice)
         if resultado:
+            pessoa.setdefault("avisos", []).append(
+                f"Coluna M (CAPA='{col_m_txt}') estava marcada para enviar, mas faltou arquivo no servidor — envio bloqueado por segurança"
+            )
             for parte in mensagem.split("; "):
                 if parte.strip():
-                    print(f"NÃO ENCONTREI: {pessoa['nome']} (SGE {pessoa['sge']}) — {parte.strip()}")
-            print(f"    {resultado} — {mensagem}")
+                    print(
+                        f"NÃO ENCONTREI: {pessoa['nome']} (SGE {pessoa['sge']}) — "
+                        f"Coluna M (CAPA='{col_m_txt}') tinha OK, mas no servidor: {parte.strip()} [ENVIO BLOQUEADO]"
+                    )
+            print(f"    {resultado} (envio bloqueado mesmo com OK na Coluna M) — {mensagem}")
             linhas.append(linha_relatorio(pessoa, achados, resultado, mensagem))
             salvar_relatorio(linhas)
             fora.append((pessoa, mensagem))
             continue
-        print("    " + texto_jpg(achados) + " | capa " + texto_capa(achados))
+        print("    CONFERIDO NO SERVIDOR OK: " + texto_jpg(achados) + " | capa " + texto_capa(achados))
         prontos.append((pessoa, achados))
 
     print("\n" + "-" * 70)
-    print(f"VÃO PARA O MAISBOOK ({len(prontos)}):")
+    print(f"CONFIRMADOS (COLUNA M OK + SERVIDOR COMPLETO) — VÃO PARA O MAISBOOK ({len(prontos)}):")
     for pessoa, _ in prontos:
-        print(f"    {pessoa['nome']} — SGE {pessoa['sge']} — {', '.join(pessoa['tamanhos'])}")
-    print(f"FICARAM DE FORA ({len(fora)}):")
+        print(f"    {pessoa['nome']} — SGE {pessoa['sge']} — CAPA='{pessoa.get('capa_planilha')}' — {', '.join(pessoa['tamanhos'])}")
+    print(f"BLOQUEADOS NA CONFERÊNCIA DO SERVIDOR (ERRO AO DAR OK NA COLUNA M) ({len(fora)}):")
     for pessoa, motivo in fora:
-        print(f"    {pessoa['nome']} — SGE {pessoa['sge']} — {motivo}")
+        print(f"    {pessoa['nome']} — SGE {pessoa['sge']} — CAPA='{pessoa.get('capa_planilha')}' — {motivo}")
     print("-" * 70)
 
     if not prontos:
