@@ -243,12 +243,50 @@ def baixar_planilha_link(link, destino):
     return destino
 
 
+def _aplicar_edicoes_dashboard(caminho_xlsx):
+    overlay = PASTA.parent / "organizador_albuns" / "edicoes_planilha_local.json"
+    if not overlay.is_file() or not Path(caminho_xlsx).is_file():
+        return
+    try:
+        import openpyxl
+        from openpyxl.utils import column_index_from_string
+
+        dados = json.loads(overlay.read_text(encoding="utf-8"))
+        registros = dados.get("linhas", {})
+        if not registros:
+            return
+        agora = time.time()
+        wb = openpyxl.load_workbook(caminho_xlsx)
+        alterou = False
+        for _, info in list(registros.items()):
+            if agora - float(info.get("ts", 0)) > 7200:
+                continue
+            aba = info.get("aba") or "GERAL ENVIOS"
+            linha_num = int(info.get("linha") or 0)
+            celulas = info.get("celulas") or {}
+            if linha_num < 1 or aba not in wb.sheetnames or not celulas:
+                continue
+            ws = wb[aba]
+            for col_ref, novo_val in celulas.items():
+                col_idx = int(col_ref) if str(col_ref).isdigit() else column_index_from_string(str(col_ref).upper())
+                ws.cell(row=linha_num, column=col_idx, value=novo_val)
+                alterou = True
+        if alterou:
+            wb.save(caminho_xlsx)
+        wb.close()
+    except Exception:
+        pass
+
+
 def caminho_planilha(cfg):
     if cfg.get("planilha_link"):
-        return baixar_planilha_link(cfg["planilha_link"], PLANILHA_BAIXADA)
+        arq = baixar_planilha_link(cfg["planilha_link"], PLANILHA_BAIXADA)
+        _aplicar_edicoes_dashboard(arq)
+        return arq
     caminho = Path(cfg["planilha"])
     if not caminho.exists():
         raise FileNotFoundError(f"Planilha não encontrada: {caminho}")
+    _aplicar_edicoes_dashboard(caminho)
     return caminho
 
 

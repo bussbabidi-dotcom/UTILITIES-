@@ -269,8 +269,47 @@ def tamanhos_do_plano(plano):
     return [tamanho]
 
 
+EDICOES_LOCAIS = PASTA / "edicoes_planilha_local.json"
+
+
+def aplicar_edicoes_locais_no_xlsx(caminho_xlsx):
+    """Aplica edições recentes feitas pelo Dashboard na cópia local .xlsx (evita atraso de cache do export Google)."""
+    if not EDICOES_LOCAIS.is_file() or not Path(caminho_xlsx).is_file():
+        return
+    try:
+        from openpyxl.utils import column_index_from_string
+
+        dados = carregar_json(EDICOES_LOCAIS)
+        registros = dados.get("linhas", {})
+        if not registros:
+            return
+        agora = time.time()
+        wb = proc.load_workbook(caminho_xlsx)
+        alterou = False
+        for chave, info in list(registros.items()):
+            # Mantém o overlay ativo por 2 horas após a edição em tempo real
+            if agora - float(info.get("ts", 0)) > 7200:
+                continue
+            aba = info.get("aba") or "GERAL ENVIOS"
+            linha_num = int(info.get("linha") or 0)
+            celulas = info.get("celulas") or {}
+            if linha_num < 1 or aba not in wb.sheetnames or not celulas:
+                continue
+            ws = wb[aba]
+            for col_ref, novo_val in celulas.items():
+                col_idx = int(col_ref) if str(col_ref).isdigit() else column_index_from_string(str(col_ref).upper())
+                ws.cell(row=linha_num, column=col_idx, value=novo_val)
+                alterou = True
+        if alterou:
+            wb.save(caminho_xlsx)
+        wb.close()
+    except Exception:
+        pass
+
+
 def ler_diagramados():
     caminho = proc.baixar_planilha_link(PLANILHA_LINK, PLANILHA)
+    aplicar_edicoes_locais_no_xlsx(caminho)
     livro = proc.load_workbook(caminho, data_only=True)
     melhor = None
     aba_padrao = None
@@ -1327,6 +1366,16 @@ def atualizar_status_planilha(contexto, pessoa, novo_status="Aguardando Aprovaç
         plan_pag.keyboard.press("Enter")
         plan_pag.wait_for_timeout(700)
         print(f"    planilha: Coluna K ({ref_celula}) atualizada para '{novo_status}'")
+        try:
+            gravar_edicoes_planilha(
+                aba=aba,
+                linha_num=linha_num,
+                celulas_dict={letra_col: novo_status},
+                sge=pessoa.get("sge", ""),
+                usar_navegador=False,
+            )
+        except Exception:
+            pass
         return f"Coluna K ({ref_celula}) -> {novo_status}"
     except Exception as erro:
         aviso = f"não consegui editar a célula {ref_celula} direto no Google Sheets ({base.erro_curto(erro)})"
@@ -1338,6 +1387,141 @@ def atualizar_status_planilha(contexto, pessoa, novo_status="Aguardando Aprovaç
                 plan_pag.close()
             except Exception:
                 pass
+
+
+def gravar_edicoes_planilha(aba, linha_num, celulas_dict, sge="", webhook_url="", usar_navegador=False):
+    """
+    Reescreve em tempo real uma ou mais células de uma linha da planilha:
+      1. Salva no overlay instantâneo (edicoes_planilha_local.json)
+      2. Atualiza todas as cópias locais .xlsx (planilha_envio_aprovacao.xlsx, planilha_organizador.xlsx, baixa_planilha.xlsx)
+      3. Envia via Webhook Google Apps Script (se configurado)
+      4. Opcionalmente abre/usa o Chrome autenticado (Playwright) para digitar direto nas células do Google Sheets
+    """
+    import urllib.request
+    from openpyxl.utils import column_index_from_string, get_column_letter
+
+    aba = (aba or "GERAL ENVIOS").strip()
+    linha_num = int(linha_num or 0)
+    if linha_num < 1 or not celulas_dict:
+        return {"ok": False, "mensagem": "Linha ou células inválidas"}
+
+    normalizadas = {}
+    for col_ref, valor in celulas_dict.items():
+        if str(col_ref).isdigit():
+            letra = get_column_letter(int(col_ref))
+        else:
+            letra = str(col_ref).strip().upper()
+        normalizadas[letra] = "" if valor is None else str(valor)
+
+    # 1. Grava no overlay local em tempo real (0ms)
+    try:
+        dados_locais = carregar_json(EDICOES_LOCAIS)
+        linhas_map = dados_locais.setdefault("linhas", {})
+        chave = f"{aba}:{linha_num}"
+        atual = linhas_map.get(chave, {"aba": aba, "linha": linha_num, "sge": str(sge or ""), "celulas": {}})
+        atual["aba"] = aba
+        atual["linha"] = linha_num
+        if sge:
+            atual["sge"] = str(sge)
+        atual.setdefault("celulas", {}).update(normalizadas)
+        atual["ts"] = time.time()
+        atual["data"] = f"{datetime.now():%Y-%m-%d %H:%M:%S}"
+        linhas_map[chave] = atual
+        salvar_json(EDICOES_LOCAIS, dados_locais)
+    except Exception as e:
+        print(f"    aviso overlay local: {e}")
+
+    # 2. Atualiza as cópias locais .xlsx imediatamente
+    arquivos_xlsx = [
+        PLANILHA,
+        PASTA / "planilha_organizador.xlsx",
+        PASTA.parent / "baixa_sge" / "baixa_planilha.xlsx",
+    ]
+    for arq in arquivos_xlsx:
+        if not arq.is_file():
+            continue
+        try:
+            wb = proc.load_workbook(arq)
+            if aba in wb.sheetnames:
+                ws = wb[aba]
+                for letra, val in normalizadas.items():
+                    idx = column_index_from_string(letra)
+                    ws.cell(row=linha_num, column=idx, value=val)
+                wb.save(arq)
+            wb.close()
+        except Exception:
+            pass
+
+    mensagens = [f"Local (.xlsx) atualizado ({', '.join(f'{k}{linha_num}={v!r}' for k, v in normalizadas.items())})"]
+
+    # 3. Se houver Webhook do Google Apps Script configurado, envia POST instantâneo
+    if not webhook_url:
+        cfg_org = carregar_json(PASTA / "organizador_config.json")
+        webhook_url = (cfg_org.get("webhook_apps_script") or "").strip()
+
+    if webhook_url and webhook_url.startswith("http"):
+        try:
+            payload = json.dumps({
+                "action": "update_cells",
+                "spreadsheetId": "1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0",
+                "sheetName": aba,
+                "aba": aba,
+                "row": linha_num,
+                "linha": linha_num,
+                "sge": str(sge or ""),
+                "cells": normalizadas,
+                "celulas": normalizadas,
+            }, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                webhook_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                 resp.read()
+            mensagens.append("Google Sheets atualizado via Webhook Apps Script")
+        except Exception as e:
+            mensagens.append(f"Aviso Webhook: {e}")
+
+    # 4. Se solicitado usar o navegador Chrome autenticado (Playwright)
+    if usar_navegador:
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as p:
+                contexto = abrir_navegador(p)
+                plan_pag = contexto.pages[0] if contexto.pages else contexto.new_page()
+                try:
+                    plan_pag.goto(PLANILHA_LINK, wait_until="domcontentloaded", timeout=60000)
+                    caixa = plan_pag.locator("#t-name-box").first
+                    caixa.wait_for(state="visible", timeout=25000)
+                    for letra, val in normalizadas.items():
+                        ref_celula = f"{letra}{linha_num}"
+                        caixa.click()
+                        caixa.fill("'" + aba.replace("'", "''") + "'!" + ref_celula)
+                        caixa.press("Enter")
+                        plan_pag.wait_for_timeout(450)
+                        if val:
+                            plan_pag.keyboard.type(val, delay=10)
+                            plan_pag.keyboard.press("Delete")
+                            plan_pag.keyboard.press("Enter")
+                        else:
+                            plan_pag.keyboard.press("Delete")
+                            plan_pag.keyboard.press("Enter")
+                        plan_pag.wait_for_timeout(550)
+                    mensagens.append("Google Sheets atualizado via Navegador Chrome")
+                finally:
+                    try:
+                        contexto.close()
+                    except Exception:
+                        pass
+        except Exception as e:
+            mensagens.append(f"Aviso Chrome: {e}")
+
+    resumo = " | ".join(mensagens)
+    print("REESCRITA PLANILHA:", resumo)
+    return {"ok": True, "mensagem": resumo}
 
 
 def dar_baixa_sge_enviado(playwright, pessoa, estado_sge):
@@ -1431,6 +1615,7 @@ def analisar_argumentos():
     parser.add_argument("--ignorar-coluna-m", action="store_true", help="permite enviar todos os DIAGRAMADO mesmo se a Coluna M (CAPA) estiver vazia")
     parser.add_argument("--sem-planilha", action="store_true", help="não atualiza a Coluna K para Aguardando Aprovação após enviar")
     parser.add_argument("--sem-sge", action="store_true", help="não dá baixa automática no SGE (Enviado para Aprovação) após enviar")
+    parser.add_argument("--gravar-celulas", help="JSON com {'aba', 'linha', 'sge', 'celulas', 'usar_navegador'} para reescrever células na planilha")
     return parser.parse_args()
 
 
@@ -1682,6 +1867,17 @@ def executar_rodada(args, em_vigia=False):
 
 def main():
     args = analisar_argumentos()
+    if getattr(args, "gravar_celulas", None):
+        dados = json.loads(args.gravar_celulas)
+        gravar_edicoes_planilha(
+            aba=dados.get("aba") or "GERAL ENVIOS",
+            linha_num=int(dados.get("linha") or 0),
+            celulas_dict=dados.get("celulas") or {},
+            sge=dados.get("sge") or "",
+            webhook_url=dados.get("webhook_url") or "",
+            usar_navegador=bool(dados.get("usar_navegador", False)),
+        )
+        return
     if args.listar or not args.vigia:
         executar_rodada(args, em_vigia=False)
         return
