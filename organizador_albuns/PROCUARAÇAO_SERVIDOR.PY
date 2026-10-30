@@ -73,8 +73,19 @@ False
 """
 
 from pathlib import Path
-from openpyxl import load_workbook
-from openpyxl.utils import column_index_from_string
+
+try:
+    from openpyxl import load_workbook
+    from openpyxl.utils import column_index_from_string
+except ImportError:
+    load_workbook = None
+
+    def column_index_from_string(col_str):
+        idx = 0
+        for ch in str(col_str).strip().upper():
+            if "A" <= ch <= "Z":
+                idx = idx * 26 + (ord(ch) - ord("A") + 1)
+        return max(1, idx)
 
 import argparse
 import csv
