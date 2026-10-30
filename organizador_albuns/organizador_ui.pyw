@@ -688,17 +688,23 @@ class JanelaOrganizador:
                 highlightthickness=1,
                 highlightbackground=BORDA,
                 bd=0,
+                cursor="hand2",
             )
             card.grid(row=0, column=idx, sticky="nsew", padx=(0 if idx == 0 else 6, 0))
-            faixa = tk.Frame(card, bg=cor, height=4)
+            faixa = tk.Frame(card, bg=cor, height=4, cursor="hand2")
             faixa.pack(fill="x", side="top")
-            corpo = tk.Frame(card, bg=CARTAO, padx=10, pady=6)
+            corpo = tk.Frame(card, bg=CARTAO, padx=10, pady=6, cursor="hand2")
             corpo.pack(fill="both", expand=True)
-            tk.Label(corpo, text=titulo, bg=CARTAO, fg=VERDE_FRACO, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+            lbl_t = tk.Label(corpo, text=titulo, bg=CARTAO, fg=VERDE_FRACO, font=("Segoe UI", 8, "bold"), cursor="hand2")
+            lbl_t.pack(anchor="w")
             var_num = tk.StringVar(value="0")
             self.kpi_vars[chave] = var_num
-            tk.Label(corpo, textvariable=var_num, bg=CARTAO, fg=cor, font=FONTE_KPI).pack(anchor="w")
-            tk.Label(corpo, text=sub, bg=CARTAO, fg=VERDE_FRACO, font=("Segoe UI", 8)).pack(anchor="w")
+            lbl_n = tk.Label(corpo, textvariable=var_num, bg=CARTAO, fg=cor, font=FONTE_KPI, cursor="hand2")
+            lbl_n.pack(anchor="w")
+            lbl_s = tk.Label(corpo, text=sub, bg=CARTAO, fg=VERDE_FRACO, font=("Segoe UI", 8), cursor="hand2")
+            lbl_s.pack(anchor="w")
+            for w in (card, faixa, corpo, lbl_t, lbl_n, lbl_s):
+                w.bind("<Button-1>", lambda _e, k=chave: self._clicar_kpi_dashboard(k))
 
         # --- 2. Painel Meio: Gráfico de Rosca (Coluna K) + Central de Disparo em Lote ---
         meio = ttk.Frame(aba)
@@ -1500,11 +1506,44 @@ class JanelaOrganizador:
             mostrados += 1
 
         self.lbl_contagem_tabela.configure(
-            text=f"{mostrados} de {len(self.alunos_dashboard)} alunos exibidos"
+            text=f"{mostrados} de {len(self.alunos_dashboard)} alunos exibidos (Etapa: {filtro_st})"
         )
+        if hasattr(self, "btn_dash_conferir_srv"):
+            etapa_curta = "Todas" if filtro_st == "Todos os Status (Col. K)" else filtro_st
+            self.btn_dash_conferir_srv.configure(
+                text=f"🔍 Conferir Servidor ({etapa_curta}: {mostrados})"
+            )
         if iid_antes and self.tabela_alunos.exists(iid_antes):
             self.tabela_alunos.selection_set(iid_antes)
             self._ao_selecionar_aluno_dashboard()
+
+    def _clicar_kpi_dashboard(self, chave):
+        if chave == "total":
+            self.filtro_etapa_donut = None
+            self.dash_filtro_status.set("Todos os Status (Col. K)")
+            self.dash_filtro_capa.set("Todos (Col. M)")
+        elif chave == "diagramados":
+            self.filtro_etapa_donut = "DIAGRAMADO"
+            self.dash_filtro_status.set("DIAGRAMADO")
+            self.dash_filtro_capa.set("Todos (Col. M)")
+        elif chave == "prontos":
+            self.filtro_etapa_donut = "DIAGRAMADO"
+            self.dash_filtro_status.set("DIAGRAMADO")
+            self.dash_filtro_capa.set("✅ Prontos p/ Enviar (DIAGRAMADO + CAPA)")
+        elif chave == "retidos":
+            self.filtro_etapa_donut = "DIAGRAMADO"
+            self.dash_filtro_status.set("DIAGRAMADO")
+            self.dash_filtro_capa.set("⏳ Diagramados Retidos (Sem CAPA na Col. M)")
+        elif chave == "aguardando":
+            self.filtro_etapa_donut = "Aguardando Aprovação"
+            self.dash_filtro_status.set("Aguardando Aprovação")
+            self.dash_filtro_capa.set("Todos (Col. M)")
+        elif chave == "concluidos":
+            self.filtro_etapa_donut = "Aprovado"
+            self.dash_filtro_status.set("Aprovado")
+            self.dash_filtro_capa.set("Todos (Col. M)")
+        self._desenhar_grafico_rosca()
+        self._filtrar_tabela_dashboard()
 
     def _ordenar_tabela_dashboard(self, col):
         reverso = getattr(self, "_ordem_reversa_col", None) == col
@@ -1888,25 +1927,36 @@ class JanelaOrganizador:
         if not pasta_srv:
             return
 
-        # Confere os alunos visíveis no filtro atual + todos os DIAGRAMADO
+        # Confere SOMENTE os alunos da etapa/filtro que está sendo mostrada na tabela
+        etapa_mostrada = self.dash_filtro_status.get()
         iids_visiveis = set(self.tabela_alunos.get_children())
         alvos = []
         vistos_sge = set()
         for a in self.alunos_dashboard:
-            if str(a["linha"]) in iids_visiveis or a["etapa_k"] == "DIAGRAMADO" or a["liberado_m"]:
+            if str(a["linha"]) in iids_visiveis:
+                if etapa_mostrada != "Todos os Status (Col. K)" and a["etapa_k"] != etapa_mostrada:
+                    continue
                 if a["sge"] not in vistos_sge:
                     alvos.append(a)
                     vistos_sge.add(a["sge"])
 
         if not alvos:
-            alvos = list(self.alunos_dashboard)
+            messagebox.showinfo(
+                "Conferir Capa e Álbum no Servidor",
+                f"Nenhum formando está sendo exibido na etapa atual ({etapa_mostrada}).\n\n"
+                "Selecione uma etapa que possua alunos na tabela para conferir no servidor.",
+            )
+            return
 
         self.btn_dash_conferir_srv.configure(state="disabled")
-        self.status.set(f"Escaneando servidor ({pasta_srv}) — conferindo CAPA e ÁLBUM de {len(alvos)} formando(s)...")
+        self.status.set(
+            f"Escaneando servidor ({pasta_srv}) — Etapa exibida: {etapa_mostrada} ({len(alvos)} formando(s))..."
+        )
         self._escrever(
             f"\n{'=' * 78}\n"
             f">>> [CONFERÊNCIA FÍSICA NO SERVIDOR] Pasta: {pasta_srv}\n"
-            f">>> Conferindo se TEM CAPA e se TEM ÁLBUM (lâminas JPG) para {len(alvos)} formando(s)...\n"
+            f">>> Etapa sendo mostrada: {etapa_mostrada} | Formandos na tela: {len(alvos)}\n"
+            f">>> Conferindo se TEM CAPA e se TEM ÁLBUM (lâminas JPG) somente desta etapa...\n"
             f"{'=' * 78}\n"
         )
 
@@ -2010,13 +2060,14 @@ class JanelaOrganizador:
                     messagebox.showinfo(
                         "Resultado da Conferência no Servidor (Capa e Álbum)",
                         f"Servidor verificado:\n{albuns}\n\n"
-                        f"Total de formandos conferidos: {len(alvos)}\n\n"
+                        f"Etapa conferida: {etapa_mostrada}\n"
+                        f"Total de formandos conferidos na etapa: {len(alvos)}\n\n"
                         f"✔ TEM ÁLBUM + TEM CAPA (Completos): {completos}\n"
                         f"⚠ SÓ TEM ÁLBUM (Falta Capa): {so_album}\n"
                         f"⚠ SÓ TEM CAPA (Falta Álbum): {so_capa}\n"
                         f"✖ SEM ÁLBUM E SEM CAPA: {sem_nada}"
                         f"{alerta_m}\n\n"
-                        "As colunas 'Álbum no Servidor (JPG)' e 'Capa no Servidor' da tabela foram atualizadas!",
+                        "As colunas 'Álbum no Servidor (JPG)' e 'Capa no Servidor' da etapa exibida foram atualizadas!",
                     )
 
                 self.root.after(0, _mostrar_resumo_modal)
