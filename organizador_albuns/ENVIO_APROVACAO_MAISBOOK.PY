@@ -307,7 +307,8 @@ def aplicar_edicoes_locais_no_xlsx(caminho_xlsx):
         pass
 
 
-def _ler_diagramados_de_csv_local():
+def _ler_diagramados_de_csv_local(etapa_filtro="diagramado"):
+    etapa_norm = normalizar(etapa_filtro or "diagramado")
     caminhos_csv = [
         PASTA.parent / "public" / "assets" / "aistudio" / "ALBUNS_25_73835ec6.2",
         PASTA.parent / "ALBUNS_25_2_COLACAO.csv",
@@ -323,7 +324,7 @@ def _ler_diagramados_de_csv_local():
             if numero <= 18 or len(linha) < 11:
                 continue
             status_k = (linha[10] if len(linha) > 10 else "").strip()
-            if normalizar(status_k) != "diagramado":
+            if etapa_norm not in ("todos", "todas", "*") and normalizar(status_k) != etapa_norm:
                 continue
             nome = (linha[2] if len(linha) > 2 else "").strip()
             cont = so_contrato(linha[3] if len(linha) > 3 else "")
@@ -368,9 +369,10 @@ def _ler_diagramados_de_csv_local():
     return lista
 
 
-def ler_diagramados():
+def ler_diagramados(etapa_filtro="diagramado"):
+    etapa_norm = normalizar(etapa_filtro or "diagramado")
     if proc.load_workbook is None:
-        return _ler_diagramados_de_csv_local()
+        return _ler_diagramados_de_csv_local(etapa_filtro)
     caminho = proc.baixar_planilha_link(PLANILHA_LINK, PLANILHA)
     aplicar_edicoes_locais_no_xlsx(caminho)
     livro = proc.load_workbook(caminho, data_only=True)
@@ -388,7 +390,7 @@ def ler_diagramados():
         for numero, linha in enumerate(folha.iter_rows(values_only=True), start=1):
             if numero <= linha_cab:
                 continue
-            if normalizar(celula(linha, colunas["status"])) == "diagramado":
+            if etapa_norm in ("todos", "todas", "*") or normalizar(celula(linha, colunas["status"])) == etapa_norm:
                 qtd += 1
         if melhor is None or qtd > melhor[0]:
             melhor = (qtd, nome, linha_cab, colunas)
@@ -404,7 +406,7 @@ def ler_diagramados():
     for numero, linha in enumerate(folha.iter_rows(values_only=True), start=1):
         if numero <= linha_cab:
             continue
-        if normalizar(celula(linha, colunas["status"])) != "diagramado":
+        if etapa_norm not in ("todos", "todas", "*") and normalizar(celula(linha, colunas["status"])) != etapa_norm:
             continue
         nome = celula(linha, colunas["nome"]).strip()
         sge = limpar_sge(celula(linha, colunas["sge"]))
@@ -1904,6 +1906,7 @@ def analisar_argumentos():
     parser.add_argument("--continuar", action="store_true", help="retoma quem ainda não foi enviado")
     parser.add_argument("--listar", action="store_true", help="só lista quem está com STATUS DIAGRAMADO e o status da Coluna M (CAPA)")
     parser.add_argument("--conferir-servidor", action="store_true", help="confere fisicamente no servidor se cada formando tem CAPA e ÁLBUM completos")
+    parser.add_argument("--etapa", default="DIAGRAMADO", help="etapa da Coluna K a ser conferida no servidor (padrão: DIAGRAMADO)")
     parser.add_argument("--conferir-json", help="JSON de entrada ou caminho para conferir lista de alunos no servidor e devolver JSON")
     parser.add_argument("--vigia", action="store_true", help="monitora continuamente a planilha e envia automaticamente quem tiver STATUS=DIAGRAMADO e Coluna M (CAPA) liberada")
     parser.add_argument("--intervalo", type=int, default=60, help="segundos entre cada verificação no modo --vigia (padrão: 60)")
@@ -2161,9 +2164,10 @@ def executar_rodada(args, em_vigia=False):
 
 
 def executar_conferencia_servidor_cli(args):
-    """Executa apenas a conferência física de CAPA e ÁLBUM no servidor (sem abrir navegador)."""
+    """Executa apenas a conferência física de CAPA e ÁLBUM no servidor (somente para a etapa solicitada)."""
     albuns, indice = preparar_indice(getattr(args, "origem", None))
-    pessoas = ler_diagramados()
+    etapa_alvo = getattr(args, "etapa", "DIAGRAMADO") or "DIAGRAMADO"
+    pessoas = ler_diagramados(etapa_filtro=etapa_alvo)
     if args.sge:
         codigo = limpar_sge(args.sge)
         pessoas = [p for p in pessoas if p["sge"] == codigo]
@@ -2172,7 +2176,7 @@ def executar_conferencia_servidor_cli(args):
 
     print("=" * 78)
     print(f"CONFERÊNCIA FÍSICA NO SERVIDOR: {albuns}")
-    print(f"Total de formandos verificados: {len(pessoas)}")
+    print(f"Etapa conferida: {etapa_alvo} | Total de formandos verificados: {len(pessoas)}")
     print("=" * 78)
 
     completos = 0
