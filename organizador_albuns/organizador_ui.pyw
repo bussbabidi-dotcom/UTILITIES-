@@ -562,6 +562,8 @@ class JanelaOrganizador:
         self.alunos_dashboard = []
         self.alunos_por_linha = {}
         self.status_servidor_por_sge = {}
+        self.detalhe_servidor_por_sge = {}
+        self._carregar_cache_conferencia_servidor()
         self.filtro_etapa_donut = None
         self.fatias_donut = []
 
@@ -808,10 +810,15 @@ class JanelaOrganizador:
         self.btn_dash_vigia_mb.pack(side="left", padx=(0, 6))
         self.btn_dash_conferir_srv = ttk.Button(
             bloco_mb,
-            text="🔍 Conferir Pastas/Capas no Servidor",
+            text="🔍 Conferir Capa e Álbum no Servidor",
             command=self._conferir_todos_no_servidor,
         )
-        self.btn_dash_conferir_srv.pack(side="left")
+        self.btn_dash_conferir_srv.pack(side="left", padx=(0, 6))
+        ttk.Button(
+            bloco_mb,
+            text="📂 Pasta Servidor...",
+            command=self._escolher_origem_dashboard,
+        ).pack(side="left")
 
         ttk.Separator(quadro_cmd, orient="horizontal").grid(row=3, column=0, sticky="we", pady=4)
 
@@ -874,20 +881,25 @@ class JanelaOrganizador:
         combo_st.pack(side="left", padx=(4, 12))
         combo_st.bind("<<ComboboxSelected>>", lambda _e: self._ao_mudar_combo_status())
 
-        ttk.Label(barra_filtro, text="Filtro CAPA (Col. M):").pack(side="left")
+        ttk.Label(barra_filtro, text="Filtro CAPA / Servidor:").pack(side="left")
         opcoes_capa_filtro = [
             "Todos (Col. M)",
             "✅ Prontos p/ Enviar (DIAGRAMADO + CAPA)",
             "⏳ Diagramados Retidos (Sem CAPA na Col. M)",
             "📗 Com CAPA liberada (Col. M preenchida)",
             "📕 Sem CAPA (Col. M vazia)",
+            "✔ Servidor Completo (Tem Álbum + Tem Capa)",
+            "⚠ Só Álbum no Servidor (Falta Capa)",
+            "⚠ Só Capa no Servidor (Falta Álbum)",
+            "✖ Sem Álbum e Sem Capa no Servidor",
+            "🚨 Erro: Col. M com OK mas Falta no Servidor",
         ]
         combo_cp = ttk.Combobox(
             barra_filtro,
             textvariable=self.dash_filtro_capa,
             values=opcoes_capa_filtro,
             state="readonly",
-            width=36,
+            width=38,
         )
         combo_cp.pack(side="left", padx=(4, 8))
         combo_cp.bind("<<ComboboxSelected>>", lambda _e: self._filtrar_tabela_dashboard())
@@ -913,7 +925,8 @@ class JanelaOrganizador:
             "status_k",
             "lote",
             "capa_m",
-            "servidor",
+            "album_srv",
+            "capa_srv",
         )
         self.tabela_alunos = ttk.Treeview(
             quadro_tabela,
@@ -923,18 +936,19 @@ class JanelaOrganizador:
             height=13,
         )
         definicoes_col = [
-            ("linha", "Linha", 52, "center", False),
-            ("sge", "SGE (E)", 78, "center", False),
-            ("nome", "Nome do Formando (Col. C)", 250, "w", True),
-            ("contrato", "Contrato (D)", 85, "center", False),
-            ("tamanho", "Tamanho (Col. F)", 140, "w", False),
-            ("curso", "Curso (Col. G)", 135, "w", False),
-            ("cpf", "CPF (Col. H)", 110, "center", False),
-            ("maisbook", "MaisBook (I)", 90, "center", False),
-            ("status_k", "Status (Col. K)", 150, "center", False),
-            ("lote", "Lote (L)", 80, "center", False),
-            ("capa_m", "CAPA (Col. M)", 115, "center", False),
-            ("servidor", "Conferência Servidor", 175, "w", False),
+            ("linha", "Linha", 48, "center", False),
+            ("sge", "SGE (E)", 74, "center", False),
+            ("nome", "Nome do Formando (Col. C)", 230, "w", True),
+            ("contrato", "Contrato (D)", 78, "center", False),
+            ("tamanho", "Tamanho (Col. F)", 135, "w", False),
+            ("curso", "Curso (Col. G)", 120, "w", False),
+            ("cpf", "CPF (Col. H)", 102, "center", False),
+            ("maisbook", "MaisBook (I)", 86, "center", False),
+            ("status_k", "Status (Col. K)", 142, "center", False),
+            ("lote", "Lote (L)", 70, "center", False),
+            ("capa_m", "CAPA (Col. M)", 108, "center", False),
+            ("album_srv", "Álbum no Servidor (JPG)", 165, "w", False),
+            ("capa_srv", "Capa no Servidor", 145, "w", False),
         ]
         for id_col, titulo, larg, anc, esticar in definicoes_col:
             self.tabela_alunos.heading(
@@ -1395,6 +1409,7 @@ class JanelaOrganizador:
         mostrados = 0
 
         for a in self.alunos_dashboard:
+            det_srv = self.detalhe_servidor_por_sge.get(a["sge"])
             if filtro_st != "Todos os Status (Col. K)" and a["etapa_k"] != filtro_st:
                 continue
             if filtro_cp == "✅ Prontos p/ Enviar (DIAGRAMADO + CAPA)":
@@ -1409,6 +1424,21 @@ class JanelaOrganizador:
             elif filtro_cp == "📕 Sem CAPA (Col. M vazia)":
                 if a["liberado_m"]:
                     continue
+            elif filtro_cp == "✔ Servidor Completo (Tem Álbum + Tem Capa)":
+                if not (det_srv and det_srv.get("completo")):
+                    continue
+            elif filtro_cp == "⚠ Só Álbum no Servidor (Falta Capa)":
+                if not (det_srv and det_srv.get("temAlbum") and not det_srv.get("temCapa")):
+                    continue
+            elif filtro_cp == "⚠ Só Capa no Servidor (Falta Álbum)":
+                if not (det_srv and not det_srv.get("temAlbum") and det_srv.get("temCapa")):
+                    continue
+            elif filtro_cp == "✖ Sem Álbum e Sem Capa no Servidor":
+                if not (det_srv and not det_srv.get("temAlbum") and not det_srv.get("temCapa")):
+                    continue
+            elif filtro_cp == "🚨 Erro: Col. M com OK mas Falta no Servidor":
+                if not (a["liberado_m"] and det_srv and not det_srv.get("completo")):
+                    continue
 
             if busca:
                 alvo = normalizar_txt(
@@ -1418,11 +1448,20 @@ class JanelaOrganizador:
                 if busca not in alvo:
                     continue
 
-            srv_txt = self.status_servidor_por_sge.get(a["sge"], "—")
+            if det_srv:
+                album_srv_txt = det_srv.get("resumoAlbum") or "—"
+                capa_srv_txt = det_srv.get("resumoCapa") or "—"
+            else:
+                srv_legado = self.status_servidor_por_sge.get(a["sge"], "")
+                album_srv_txt = srv_legado or "— (Clique em Conferir)"
+                capa_srv_txt = "—"
+
             capa_exib = f"✅ {a['capa_m']}" if a["liberado_m"] else (a["capa_m"] or "(vazia)")
 
-            if "⚠" in srv_txt or "Falta" in srv_txt:
+            if det_srv and not det_srv.get("completo") and (a["etapa_k"] == "DIAGRAMADO" or a["liberado_m"]):
                 tag = "erro_servidor"
+            elif det_srv and det_srv.get("completo"):
+                tag = "pronto_envio"
             elif a["etapa_k"] == "DIAGRAMADO" and a["liberado_m"]:
                 tag = "pronto_envio"
             elif a["etapa_k"] == "DIAGRAMADO" and not a["liberado_m"]:
@@ -1453,7 +1492,8 @@ class JanelaOrganizador:
                     a["status_k"] or "(vazio)",
                     a["lote"],
                     capa_exib,
-                    srv_txt,
+                    album_srv_txt,
+                    capa_srv_txt,
                 ),
                 tags=(tag,),
             )
@@ -1778,28 +1818,118 @@ class JanelaOrganizador:
     # --------------------------------------------------------------------------
     # DISPARO INDIVIDUAL E EM LOTE: ENVIO MAISBOOK E BAIXA SGE
     # --------------------------------------------------------------------------
-    def _conferir_todos_no_servidor(self):
-        """Conferência física em segundo plano no servidor (Fase 1) para todos os alunos DIAGRAMADO."""
-        pasta_orig = self.origem.get().strip() or ORIGEM_PADRAO
-        if not Path(pasta_orig).is_dir():
-            messagebox.showwarning(
-                "Conferência no Servidor",
-                f"A pasta do servidor não está acessível neste computador agora:\n\n{pasta_orig}\n\n"
-                "Verifique o caminho na guia 'Buscar e copiar' antes de conferir fisicamente.",
+    def _carregar_cache_conferencia_servidor(self):
+        """Carrega o último resultado salvo de conferência física no servidor (conferencia_servidor.json)."""
+        arq = PASTA / "conferencia_servidor.json"
+        if not arq.is_file():
+            return
+        try:
+            dados = json.loads(arq.read_text(encoding="utf-8"))
+            resultados = dados.get("resultados") or {}
+            if isinstance(resultados, dict):
+                for sge, info in resultados.items():
+                    self.detalhe_servidor_por_sge[str(sge)] = info
+                    self.status_servidor_por_sge[str(sge)] = info.get("resumoGeral") or "—"
+        except Exception:
+            pass
+
+    def _salvar_cache_conferencia_servidor(self, caminho_srv):
+        try:
+            arq = PASTA / "conferencia_servidor.json"
+            payload = {
+                "servidor": str(caminho_srv),
+                "verificadoEm": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "resultados": self.detalhe_servidor_por_sge,
+            }
+            arq.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _escolher_origem_dashboard(self):
+        caminho = filedialog.askdirectory(
+            title="Escolher Pasta do Servidor (onde ficam CAPAS e as REMESSAS de álbuns)",
+            initialdir=self.origem.get().strip() or ORIGEM_PADRAO,
+        )
+        if caminho:
+            self.origem.set(os.path.normpath(caminho))
+            self._salvar_config()
+            self.status.set(f"Pasta do servidor configurada: {self.origem.get()}")
+            self._escrever(f"\n>>> [SERVIDOR] Pasta configurada para conferência: {self.origem.get()}\n")
+
+    def _garantir_pasta_servidor_acessivel(self, mod_envio):
+        """Resolve a pasta do servidor ou permite ao usuário escolher a pasta imediatamente se não achar."""
+        pasta_cfg = self.origem.get().strip() or ORIGEM_PADRAO
+        try:
+            resolvida = mod_envio.resolver_pasta_servidor(pasta_cfg)
+            return resolvida
+        except Exception:
+            resp = messagebox.askyesno(
+                "Selecionar Pasta do Servidor",
+                f"A pasta configurada do servidor não foi encontrada neste computador:\n\n{pasta_cfg}\n\n"
+                "Deseja selecionar agora a pasta onde estão as CAPAS e os ÁLBUNS (Remessas / Lote)?",
             )
+            if not resp:
+                return None
+            escolhida = filedialog.askdirectory(title="Selecione a pasta do servidor (CAPAS e ÁLBUNS)")
+            if not escolhida:
+                return None
+            self.origem.set(os.path.normpath(escolhida))
+            self._salvar_config()
+            return Path(escolhida)
+
+    def _conferir_todos_no_servidor(self):
+        """Conferência física real no servidor: verifica se TEM ÁLBUM (lâminas JPG) e se TEM CAPA."""
+        if not self.alunos_dashboard:
+            messagebox.showinfo("Conferência no Servidor", "Aguarde o carregamento da planilha antes de conferir.")
             return
 
-        self.status.set("Conferindo pastas de lâminas JPG e capas no servidor para os alunos DIAGRAMADO...")
-        self._escrever("\n>>> [CONFERÊNCIA SERVIDOR] Verificando capa e lâminas JPG de quem está DIAGRAMADO...\n")
+        mod_envio = SourceFileLoader("envio_mb_check", str(SCRIPT_ENVIO)).load_module()
+        pasta_srv = self._garantir_pasta_servidor_acessivel(mod_envio)
+        if not pasta_srv:
+            return
+
+        # Confere os alunos visíveis no filtro atual + todos os DIAGRAMADO
+        iids_visiveis = set(self.tabela_alunos.get_children())
+        alvos = []
+        vistos_sge = set()
+        for a in self.alunos_dashboard:
+            if str(a["linha"]) in iids_visiveis or a["etapa_k"] == "DIAGRAMADO" or a["liberado_m"]:
+                if a["sge"] not in vistos_sge:
+                    alvos.append(a)
+                    vistos_sge.add(a["sge"])
+
+        if not alvos:
+            alvos = list(self.alunos_dashboard)
+
+        self.btn_dash_conferir_srv.configure(state="disabled")
+        self.status.set(f"Escaneando servidor ({pasta_srv}) — conferindo CAPA e ÁLBUM de {len(alvos)} formando(s)...")
+        self._escrever(
+            f"\n{'=' * 78}\n"
+            f">>> [CONFERÊNCIA FÍSICA NO SERVIDOR] Pasta: {pasta_srv}\n"
+            f">>> Conferindo se TEM CAPA e se TEM ÁLBUM (lâminas JPG) para {len(alvos)} formando(s)...\n"
+            f"{'=' * 78}\n"
+        )
 
         def _worker():
             try:
-                mod_envio = SourceFileLoader("envio_mb_check", str(SCRIPT_ENVIO)).load_module()
-                albuns, indice = mod_envio.preparar_indice()
-                diagramados = [a for a in self.alunos_dashboard if a["etapa_k"] == "DIAGRAMADO"]
-                ok_count = 0
-                falta_count = 0
-                for a in diagramados:
+                albuns, indice = mod_envio.preparar_indice(str(pasta_srv))
+                pasta_capas = albuns / mod_envio.proc.PASTA_CAPAS
+                qtd_capas_arq = len(mod_envio.proc.listar_arquivos_capas(pasta_capas)) if pasta_capas.is_dir() else 0
+                self.root.after(
+                    0,
+                    lambda: self._escrever(
+                        f"    📁 Pastas de álbum indexadas no servidor: {len(indice)} | "
+                        f"Arquivos na pasta CAPAS: {qtd_capas_arq}\n\n"
+                    ),
+                )
+
+                completos = 0
+                so_album = 0
+                so_capa = 0
+                sem_nada = 0
+                erros_col_m = []
+
+                for idx, a in enumerate(alvos, start=1):
                     tamanhos = mod_envio.tamanhos_do_plano(a["tamanho"])
                     pessoa = {
                         "nome": a["nome"],
@@ -1808,31 +1938,92 @@ class JanelaOrganizador:
                         "tamanhos": tamanhos,
                         "planos": [a["tamanho"]] if a["tamanho"] else [],
                     }
-                    achados, msg, resultado = mod_envio.localizar_albuns(pessoa, albuns, indice)
-                    if resultado:
-                        self.status_servidor_por_sge[a["sge"]] = f"⚠ {msg}"
-                        falta_count += 1
-                    else:
-                        resumo_jpg = ", ".join(f"{it['tamanho']}:{it['laminas']}jpg" for it in (achados or []))
-                        self.status_servidor_por_sge[a["sge"]] = f"✔ OK ({resumo_jpg} + capa)"
-                        ok_count += 1
+                    info = mod_envio.conferir_pessoa_no_servidor(pessoa, albuns, indice)
+                    self.detalhe_servidor_por_sge[a["sge"]] = info
+                    self.status_servidor_por_sge[a["sge"]] = info["resumoGeral"]
 
+                    if info["completo"]:
+                        completos += 1
+                        tag_log = "ok"
+                    elif info["temAlbum"] and not info["temCapa"]:
+                        so_album += 1
+                        tag_log = "aviso"
+                    elif not info["temAlbum"] and info["temCapa"]:
+                        so_capa += 1
+                        tag_log = "aviso"
+                    else:
+                        sem_nada += 1
+                        tag_log = "erro" if (a["etapa_k"] == "DIAGRAMADO" or a["liberado_m"]) else None
+
+                    if a["liberado_m"] and not info["completo"]:
+                        erros_col_m.append((a, info))
+
+                    # Log detalhado no console para cada formando DIAGRAMADO ou que tenha algum arquivo ou OK na Col M
+                    if a["etapa_k"] == "DIAGRAMADO" or a["liberado_m"] or info["temPastaAlbum"] or info["temCapa"] or len(alvos) <= 80:
+                        col_m_str = a["capa_m"] or "(vazia)"
+                        linha_log = (
+                            f"[{idx}/{len(alvos)}] Linha {a['linha']} | SGE {a['sge']} — {a['nome']} "
+                            f"(Col.K={a['status_k']} | Col.M={col_m_str})\n"
+                            f"      • ÁLBUM: {info['resumoAlbum']}"
+                            + (f" -> {info['pastaAlbum']}" if info.get("pastaAlbum") else "")
+                            + "\n"
+                            f"      • CAPA : {info['resumoCapa']}"
+                            + (f" -> {info['arquivoCapa']}" if info.get("arquivoCapa") else "")
+                            + "\n"
+                        )
+                        self.root.after(0, lambda t=linha_log, tg=tag_log: self._escrever(t, tg))
+
+                self._salvar_cache_conferencia_servidor(albuns)
                 self.root.after(0, self._filtrar_tabela_dashboard)
+
+                resumo_final = (
+                    f"\n{'=' * 78}\n"
+                    f"✔ CONFERÊNCIA NO SERVIDOR CONCLUÍDA ({len(alvos)} formandos verificados):\n"
+                    f"  • Completos (TEM ÁLBUM + TEM CAPA) : {completos}\n"
+                    f"  • Só Álbum (TEM ÁLBUM, FALTA CAPA) : {so_album}\n"
+                    f"  • Só Capa (TEM CAPA, FALTA ÁLBUM)  : {so_capa}\n"
+                    f"  • Sem Álbum e Sem Capa no Servidor : {sem_nada}\n"
+                    f"  • Com OK na Col. M mas faltando arq: {len(erros_col_m)}\n"
+                    f"{'=' * 78}\n"
+                )
+                self.root.after(0, lambda: self._escrever(resumo_final, "ok" if completos > 0 else "aviso"))
                 self.root.after(
                     0,
                     lambda: self.status.set(
-                        f"Conferência no servidor concluída: {ok_count} completo(s) | {falta_count} com arquivo faltando."
+                        f"Servidor conferido: {completos} completo(s) (Álbum+Capa) | "
+                        f"{so_album} só Álbum | {so_capa} só Capa | {sem_nada} sem arquivos."
                     ),
                 )
-                self.root.after(
-                    0,
-                    lambda: self._escrever(
-                        f"    ✔ Conferência concluída: {ok_count} completo(s) | {falta_count} pendente(s) no servidor.\n"
-                    ),
-                )
+
+                def _mostrar_resumo_modal():
+                    self.btn_dash_conferir_srv.configure(state="normal")
+                    alerta_m = ""
+                    if erros_col_m:
+                        nomes_err = "\n".join(
+                            f"  • Linha {x['linha']}: {x['nome']} (SGE {x['sge']}) -> {inf['resumoGeral']}"
+                            for x, inf in erros_col_m[:8]
+                        )
+                        alerta_m = (
+                            f"\n\n🚨 ATENÇÃO — {len(erros_col_m)} formando(s) estão com OK na Coluna M (CAPA), "
+                            f"mas FALTAM arquivos no servidor (o envio ficará bloqueado por segurança):\n{nomes_err}"
+                        )
+                    messagebox.showinfo(
+                        "Resultado da Conferência no Servidor (Capa e Álbum)",
+                        f"Servidor verificado:\n{albuns}\n\n"
+                        f"Total de formandos conferidos: {len(alvos)}\n\n"
+                        f"✔ TEM ÁLBUM + TEM CAPA (Completos): {completos}\n"
+                        f"⚠ SÓ TEM ÁLBUM (Falta Capa): {so_album}\n"
+                        f"⚠ SÓ TEM CAPA (Falta Álbum): {so_capa}\n"
+                        f"✖ SEM ÁLBUM E SEM CAPA: {sem_nada}"
+                        f"{alerta_m}\n\n"
+                        "As colunas 'Álbum no Servidor (JPG)' e 'Capa no Servidor' da tabela foram atualizadas!",
+                    )
+
+                self.root.after(0, _mostrar_resumo_modal)
             except Exception as e:
+                self.root.after(0, lambda: self.btn_dash_conferir_srv.configure(state="normal"))
                 self.root.after(0, lambda: self.status.set(f"Aviso na conferência do servidor: {e}"))
-                self.root.after(0, lambda: self._escrever(f"    ⚠ Aviso servidor: {e}\n"))
+                self.root.after(0, lambda: self._escrever(f"    ⚠ Erro ao conferir servidor: {e}\n", "erro"))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -1841,20 +2032,20 @@ class JanelaOrganizador:
         if not aluno:
             messagebox.showinfo("Conferir no Servidor", "Selecione um formando na tabela primeiro.")
             return
-        pasta_orig = self.origem.get().strip() or ORIGEM_PADRAO
-        if not Path(pasta_orig).is_dir():
-            messagebox.showwarning(
-                "Servidor não acessível",
-                f"A pasta do servidor não foi encontrada neste computador:\n\n{pasta_orig}",
-            )
+
+        mod_envio = SourceFileLoader("envio_mb_single", str(SCRIPT_ENVIO)).load_module()
+        pasta_srv = self._garantir_pasta_servidor_acessivel(mod_envio)
+        if not pasta_srv:
             return
 
-        self.status.set(f"Procurando álbum e capa de {aluno['nome']} (SGE {aluno['sge']}) no servidor...")
+        self.status.set(f"Conferindo no servidor se tem CAPA e ÁLBUM de {aluno['nome']} (SGE {aluno['sge']})...")
+        self._escrever(
+            f"\n>>> [CONFERÊNCIA INDIVIDUAL NO SERVIDOR] Linha {aluno['linha']} | SGE {aluno['sge']} — {aluno['nome']}\n"
+        )
 
         def _worker():
             try:
-                mod_envio = SourceFileLoader("envio_mb_single", str(SCRIPT_ENVIO)).load_module()
-                albuns, indice = mod_envio.preparar_indice()
+                albuns, indice = mod_envio.preparar_indice(str(pasta_srv))
                 tamanhos = mod_envio.tamanhos_do_plano(aluno["tamanho"])
                 pessoa = {
                     "nome": aluno["nome"],
@@ -1863,29 +2054,181 @@ class JanelaOrganizador:
                     "tamanhos": tamanhos,
                     "planos": [aluno["tamanho"]] if aluno["tamanho"] else [],
                 }
-                achados, msg, resultado = mod_envio.localizar_albuns(pessoa, albuns, indice)
-                if resultado:
-                    self.status_servidor_por_sge[aluno["sge"]] = f"⚠ {msg}"
-                    texto_msg = (
-                        f"⚠ FALTAM ARQUIVOS NO SERVIDOR PARA:\n{aluno['nome']} (SGE {aluno['sge']})\n\n"
-                        f"Detalhe: {msg}\n\n"
-                        "O envio para o MaisBook ficará bloqueado por segurança até que a capa e todas as lâminas estejam na pasta."
-                    )
-                    self.root.after(0, lambda: messagebox.showwarning("Conferência no Servidor", texto_msg))
-                else:
-                    resumo_jpg = ", ".join(f"{it['tamanho']}:{it['laminas']}/{it['esperadas']} JPG" for it in (achados or []))
-                    self.status_servidor_por_sge[aluno["sge"]] = f"✔ OK ({resumo_jpg} + capa)"
-                    texto_msg = (
-                        f"✔ ÁLBUM E CAPA COMPLETOS NO SERVIDOR!\n\n"
-                        f"Formando: {aluno['nome']} (SGE {aluno['sge']})\n"
-                        f"Arquivos conferidos: {resumo_jpg} + Capa encontrada."
-                    )
-                    self.root.after(0, lambda: messagebox.showinfo("Conferência no Servidor", texto_msg))
+                info = mod_envio.conferir_pessoa_no_servidor(pessoa, albuns, indice)
+                self.detalhe_servidor_por_sge[aluno["sge"]] = info
+                self.status_servidor_por_sge[aluno["sge"]] = info["resumoGeral"]
+                self._salvar_cache_conferencia_servidor(albuns)
+
+                log_ind = (
+                    f"    • Servidor: {albuns}\n"
+                    f"    • ÁLBUM: {info['resumoAlbum']}"
+                    + (f" ({info['pastaAlbum']})" if info.get("pastaAlbum") else "")
+                    + "\n"
+                    f"    • CAPA : {info['resumoCapa']}"
+                    + (f" ({info['arquivoCapa']})" if info.get("arquivoCapa") else "")
+                    + "\n"
+                    f"    • RESULTADO: {info['resumoGeral']}\n"
+                )
+                self.root.after(0, lambda: self._escrever(log_ind, "ok" if info["completo"] else "aviso"))
                 self.root.after(0, self._filtrar_tabela_dashboard)
+                self.root.after(0, lambda: self._abrir_modal_resultado_conferencia_individual(aluno, info, albuns))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Erro ao conferir no servidor", str(e)))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _abrir_modal_resultado_conferencia_individual(self, aluno, info, albuns):
+        janela = tk.Toplevel(self.root)
+        janela.title(f"Conferência no Servidor — {aluno['nome']} (SGE {aluno['sge']})")
+        janela.geometry("720x520")
+        janela.configure(bg=CARTAO)
+        janela.transient(self.root)
+        janela.grab_set()
+
+        cor_topo = SUCESSO if info.get("completo") else (AVISO if (info.get("temAlbum") or info.get("temCapa")) else ERRO)
+        titulo_topo = (
+            "✔ ÁLBUM E CAPA ENCONTRADOS E COMPLETOS NO SERVIDOR"
+            if info.get("completo")
+            else (
+                "⚠ INCOMPLETO NO SERVIDOR — VERIFIQUE OS ITENS ABAIXO"
+                if (info.get("temAlbum") or info.get("temCapa") or info.get("temPastaAlbum"))
+                else "✖ NEM ÁLBUM NEM CAPA FORAM ENCONTRADOS NO SERVIDOR"
+            )
+        )
+
+        topo = tk.Frame(janela, bg=cor_topo, padx=14, pady=10)
+        topo.pack(fill="x")
+        tk.Label(topo, text=titulo_topo, bg=cor_topo, fg="#FFFFFF", font=FONTE_TITULO).pack(anchor="w")
+        tk.Label(
+            topo,
+            text=f"Formando: {aluno['nome']} | SGE: {aluno['sge']} | Linha: {aluno['linha']} | Plano (Col. F): {aluno['tamanho'] or '-'}",
+            bg=cor_topo,
+            fg="#FFFFFF",
+            font=FONTE_NEGRITO,
+        ).pack(anchor="w", pady=(2, 0))
+
+        corpo = ttk.Frame(janela, padding=14, style="Card.TFrame")
+        corpo.pack(fill="both", expand=True)
+        corpo.columnconfigure(0, weight=1)
+
+        tk.Label(
+            corpo,
+            text=f"📂 Pasta do Servidor Verificada: {albuns}",
+            bg=CARTAO,
+            fg=VERDE_FRACO,
+            font=FONTE,
+            anchor="w",
+        ).pack(fill="x", pady=(0, 8))
+
+        # Resumo direto de ÁLBUM e CAPA
+        quadro_res = tk.Frame(corpo, bg="#F8FAFC", highlightthickness=1, highlightbackground=BORDA, padx=12, pady=10)
+        quadro_res.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            quadro_res,
+            text=f"ÁLBUM NO SERVIDOR :  {info.get('resumoAlbum')}",
+            bg="#F8FAFC",
+            fg=SUCESSO if info.get("temAlbum") else ERRO,
+            font=FONTE_NEGRITO,
+            anchor="w",
+        ).pack(fill="x", pady=2)
+        tk.Label(
+            quadro_res,
+            text=f"CAPA NO SERVIDOR  :  {info.get('resumoCapa')}",
+            bg="#F8FAFC",
+            fg=SUCESSO if info.get("temCapa") else ERRO,
+            font=FONTE_NEGRITO,
+            anchor="w",
+        ).pack(fill="x", pady=2)
+        tk.Label(
+            quadro_res,
+            text=f"COLUNA M (PLANILHA):  {aluno.get('capa_m') or '(vazia)'} "
+            f"[{'LIBERADO NA PLANILHA' if aluno.get('liberado_m') else 'RETIDO NA PLANILHA'}]",
+            bg="#F8FAFC",
+            fg=VERDE,
+            font=FONTE,
+            anchor="w",
+        ).pack(fill="x", pady=2)
+
+        # Detalhes dos caminhos encontrados por tamanho
+        caixa_det = scrolledtext.ScrolledText(corpo, height=9, font=("Consolas", 9))
+        caixa_det.pack(fill="both", expand=True, pady=(0, 10))
+        linhas_txt = []
+        for it in info.get("itens") or []:
+            linhas_txt.append(f"=== TAMANHO {it['tamanho']} ===")
+            if it["temAlbum"]:
+                linhas_txt.append(f"  [✔] ÁLBUM COMPLETO: {it['laminasEncontradas']}/{it['laminasEsperadas']} lâminas JPG")
+                linhas_txt.append(f"      Pasta Álbum  : {it['pastaAlbum']}")
+                if it.get("remessa"):
+                    linhas_txt.append(f"      Remessa      : {it['remessa']}")
+            elif it["temPastaAlbum"]:
+                linhas_txt.append(
+                    f"  [⚠] ÁLBUM INCOMPLETO: {it['laminasEncontradas']}/{it['laminasEsperadas']} lâminas JPG encontradas"
+                )
+                linhas_txt.append(f"      Pasta Álbum  : {it['pastaAlbum']}")
+            else:
+                linhas_txt.append(f"  [✖] ÁLBUM NÃO ENCONTRADO no servidor para o tamanho {it['tamanho']}")
+
+            if it["temCapa"]:
+                linhas_txt.append(f"  [✔] CAPA ENCONTRADA:")
+                linhas_txt.append(f"      Arquivo Capa : {it['arquivoCapa']}")
+            else:
+                linhas_txt.append(f"  [✖] CAPA NÃO ENCONTRADA na pasta CAPAS nem na pasta do álbum ({it['tamanho']})")
+            linhas_txt.append("")
+
+        if not linhas_txt:
+            linhas_txt.append(f"Aviso: {info.get('mensagem') or 'Plano/tamanho não identificado na Coluna F.'}")
+        caixa_det.insert("1.0", "\n".join(linhas_txt))
+        caixa_det.configure(state="disabled")
+
+        rodape = tk.Frame(corpo, bg=CARTAO)
+        rodape.pack(fill="x")
+
+        if info.get("pastaAlbum") and Path(info["pastaAlbum"]).exists():
+            ttk.Button(
+                rodape,
+                text="📂 Abrir Pasta do Álbum",
+                command=lambda: os.startfile(info["pastaAlbum"]),
+            ).pack(side="left", padx=(0, 6))
+
+        if info.get("arquivoCapa") and Path(info["arquivoCapa"]).exists():
+            ttk.Button(
+                rodape,
+                text="🖼 Abrir Pasta da Capa",
+                command=lambda: os.startfile(str(Path(info["arquivoCapa"]).parent)),
+            ).pack(side="left", padx=(0, 6))
+
+        if info.get("completo") and not aluno.get("liberado_m"):
+            def _liberar_col_m():
+                janela.destroy()
+                self._executar_reescrita_planilha(
+                    aluno,
+                    {"M": "CAPA"},
+                    f"Coluna M (CAPA) -> 'CAPA' após conferência OK no servidor ({aluno['nome']})",
+                )
+
+            ttk.Button(
+                rodape,
+                text="✅ Marcar 'CAPA' na Coluna M da Planilha",
+                style="Sucesso.TButton",
+                command=_liberar_col_m,
+            ).pack(side="left", padx=(0, 6))
+        elif not info.get("completo") and aluno.get("liberado_m"):
+            def _reter_col_m():
+                janela.destroy()
+                self._executar_reescrita_planilha(
+                    aluno,
+                    {"M": ""},
+                    f"Coluna M (CAPA) limpa porque falta capa/álbum no servidor ({aluno['nome']})",
+                )
+
+            ttk.Button(
+                rodape,
+                text="🚫 Remover OK da Coluna M (Falta Arquivo)",
+                style="Perigo.TButton",
+                command=_reter_col_m,
+            ).pack(side="left", padx=(0, 6))
+
+        ttk.Button(rodape, text="Fechar", command=janela.destroy).pack(side="right")
 
     def _dash_enviar_prontos_lote(self):
         if self.processo:
@@ -2777,7 +3120,7 @@ class JanelaOrganizador:
         self.texto.delete("1.0", "end")
         self.texto.configure(state="disabled")
 
-    def _escrever(self, texto):
+    def _escrever(self, texto, tag=None):
         achado = RE_RESUMO.search(texto)
         if achado:
             self.resumo = achado.group(1)
@@ -2795,7 +3138,9 @@ class JanelaOrganizador:
         if aviso:
             self.status.set(aviso)
         self.texto.configure(state="normal")
-        if aviso:
+        if tag:
+            self.texto.insert("end", texto, tag)
+        elif aviso:
             self.texto.insert("end", texto, "aviso")
         else:
             self.texto.insert("end", texto)
@@ -2904,6 +3249,9 @@ class JanelaOrganizador:
 
     def _envio_argumentos(self):
         argumentos = []
+        pasta_orig = self.origem.get().strip()
+        if pasta_orig:
+            argumentos += ["--origem", pasta_orig]
         sge = self.envio_sge.get().strip()
         if sge:
             if not re.fullmatch(r"\d+", sge.split(".")[-1]):
