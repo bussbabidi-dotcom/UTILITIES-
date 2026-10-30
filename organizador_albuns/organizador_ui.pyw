@@ -374,7 +374,10 @@ class JanelaOrganizador:
         self.pastas_existentes = tk.StringVar(value="")
         self.envio_sge = tk.StringVar(value="")
         self.envio_limite = tk.StringVar(value="")
+        self.envio_intervalo = tk.StringVar(value=str(cfg.get("envio_intervalo", 60)))
         self.envio_simular = tk.BooleanVar(value=False)
+        self.envio_atualizar_planilha = tk.BooleanVar(value=cfg.get("envio_atualizar_planilha", True))
+        self.envio_baixa_sge = tk.BooleanVar(value=cfg.get("envio_baixa_sge", True))
         self.status = tk.StringVar(value="Escolha a guia do programa.")
         self.combos_aba = []
 
@@ -566,39 +569,59 @@ class JanelaOrganizador:
         quem.columnconfigure(0, weight=1)
         ttk.Label(
             quem,
-            text="Quem está com STATUS DIAGRAMADO na planilha ALBUNS 25.2.\n"
+            text="Quem está com STATUS DIAGRAMADO na planilha ALBUNS 25.2 (Coluna C = NOME, Coluna E = SGE, Coluna K = STATUS).\n"
             "Fase 1: procura capa e álbum de todos no servidor.\n"
-            "Fase 2: só quem tem os dois — um aluno por vez, abre o Drive no MaisBook, coloca o álbum e a capa "
-            "em ALBUM APROVAÇAO, cola o link da pasta em Álbum pronto e manda o e-mail.",
+            "Fase 2: só quem tem os dois — sobe para ALBUM APROVAÇAO no Drive, cola o link em Álbum pronto no MaisBook, "
+            "envia o e-mail de aprovação, avança a Coluna K para 'Aguardando Aprovação' e dá baixa no SGE como 'Enviado para Aprovação'.",
             wraplength=920,
         ).grid(row=0, column=0, sticky="w")
 
-        filtros = ttk.LabelFrame(aba, text="Filtro", padding=6)
+        filtros = ttk.LabelFrame(aba, text="Filtro e automação", padding=6)
         filtros.grid(row=1, column=0, sticky="we", pady=(8, 0))
         ttk.Label(filtros, text="SGE").grid(row=0, column=0, sticky="w")
         ttk.Entry(filtros, textvariable=self.envio_sge, width=14).grid(row=0, column=1, sticky="w", padx=(4, 16))
         ttk.Label(filtros, text="Limite").grid(row=0, column=2, sticky="w")
         ttk.Entry(filtros, textvariable=self.envio_limite, width=6).grid(row=0, column=3, sticky="w", padx=(4, 16))
+        ttk.Label(filtros, text="Intervalo vigia (s)").grid(row=0, column=4, sticky="w")
+        ttk.Entry(filtros, textvariable=self.envio_intervalo, width=6).grid(row=0, column=5, sticky="w", padx=(4, 16))
         ttk.Checkbutton(
             filtros,
-            text="Simular (não cria pasta, não cola o link e não envia e-mail)",
+            text="Simular (não sobe, não cola e não envia)",
             variable=self.envio_simular,
-        ).grid(row=0, column=4, sticky="w")
+        ).grid(row=0, column=6, sticky="w")
+
+        opcoes_auto = ttk.Frame(filtros)
+        opcoes_auto.grid(row=1, column=0, columnspan=7, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(
+            opcoes_auto,
+            text="Atualizar Coluna K para 'Aguardando Aprovação' após envio",
+            variable=self.envio_atualizar_planilha,
+        ).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(
+            opcoes_auto,
+            text="Dar baixa automática no SGE ('Enviado para Aprovação')",
+            variable=self.envio_baixa_sge,
+        ).pack(side="left")
+
         ttk.Label(
             filtros,
-            text="SGE e limite são opcionais. Vazio envia a fila inteira de quem ainda está pendente.",
+            text="SGE e limite são opcionais. Em 'Vigia Contínuo', o robô monitora sem fim a planilha e o servidor.",
             style="Fraco.TLabel",
-        ).grid(row=1, column=0, columnspan=5, sticky="w", pady=(6, 0))
+        ).grid(row=2, column=0, columnspan=7, sticky="w", pady=(6, 0))
 
         acoes = ttk.Frame(aba)
         acoes.grid(row=2, column=0, sticky="we", pady=(8, 0))
         self.botao_envio_iniciar = ttk.Button(acoes, text="Iniciar", command=self._envio_iniciar)
         self.botao_envio_iniciar.pack(side="left")
+        self.botao_envio_vigia = ttk.Button(
+            acoes, text="Iniciar Vigia Contínuo", command=self._envio_vigia
+        )
+        self.botao_envio_vigia.pack(side="left", padx=(8, 0))
         self.botao_envio_continuar = ttk.Button(
             acoes, text="Continuar de onde parou", command=self._envio_continuar
         )
         self.botao_envio_continuar.pack(side="left", padx=(8, 0))
-        self.botao_envio_fila = ttk.Button(acoes, text="Ver fila", command=self._envio_listar)
+        self.botao_envio_fila = ttk.Button(acoes, text="Ver fila (DIAGRAMADO)", command=self._envio_listar)
         self.botao_envio_fila.pack(side="left", padx=(8, 0))
         self.botao_envio_parar = ttk.Button(
             acoes, text="Parar", command=self._envio_parar, state="disabled", style="Perigo.TButton"
@@ -609,7 +632,7 @@ class JanelaOrganizador:
 
         ttk.Label(
             aba,
-            text="Sem capa com o nome da pessoa, o envio dessa pessoa para antes do Drive e do e-mail. "
+            text="Sem capa com o nome da pessoa, o envio dessa pessoa aguarda antes do Drive e do e-mail. "
             "Parar espera a pessoa atual terminar. Um segundo clique em Parar fecha na hora.",
             wraplength=920,
         ).grid(row=3, column=0, sticky="w", pady=(8, 0))
@@ -711,6 +734,9 @@ class JanelaOrganizador:
             "plano": self.plano.get().strip(),
             "tamanhos": [t for t, v in self.tamanhos.items() if v.get()],
             "categorias": [c for c, v in self.categorias.items() if v.get()],
+            "envio_intervalo": int(self.envio_intervalo.get().strip() or 60),
+            "envio_atualizar_planilha": bool(self.envio_atualizar_planilha.get()),
+            "envio_baixa_sge": bool(self.envio_baixa_sge.get()),
         }
         CONFIG.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -1039,6 +1065,7 @@ class JanelaOrganizador:
         self.botao_simular_renomeio.configure(state=estado)
         self.botao_renomear.configure(state=estado)
         self.botao_envio_iniciar.configure(state=estado)
+        self.botao_envio_vigia.configure(state=estado)
         self.botao_envio_continuar.configure(state=estado)
         self.botao_envio_fila.configure(state=estado)
         self.botao_envio_relatorio.configure(state=estado)
@@ -1194,6 +1221,10 @@ class JanelaOrganizador:
                 messagebox.showerror("Enviar aprovação", "O limite é a quantidade de pessoas.")
                 return None
             argumentos += ["--limite", limite]
+        if not self.envio_atualizar_planilha.get():
+            argumentos += ["--sem-planilha"]
+        if not self.envio_baixa_sge.get():
+            argumentos += ["--sem-sge"]
         return argumentos
 
     def _envio_iniciar(self):
@@ -1207,12 +1238,32 @@ class JanelaOrganizador:
             argumentos = argumentos + ["--simular"]
         elif not messagebox.askyesno(
             "Enviar de verdade",
-            "Isso sobe as fotos no Drive, grava o link em Álbum pronto e envia o e-mail.\n\nContinuar?",
+            "Isso sobe as fotos no Drive, grava o link em Álbum pronto, envia o e-mail, "
+            "atualiza a Coluna K para 'Aguardando Aprovação' e dá baixa no SGE.\n\nContinuar?",
         ):
             return
         self._envio_executar(
             argumentos,
             "Simulando o envio..." if simular else "Enviando álbum para aprovação...",
+        )
+
+    def _envio_vigia(self):
+        if self.processo:
+            return
+        argumentos = self._envio_argumentos()
+        if argumentos is None:
+            return
+        intervalo = self.envio_intervalo.get().strip() or "60"
+        if not intervalo.isdigit() or int(intervalo) < 10:
+            messagebox.showerror("Vigia Contínuo", "O intervalo do vigia deve ser de pelo menos 10 segundos.")
+            return
+        argumentos += ["--vigia", "--intervalo", intervalo]
+        simular = self.envio_simular.get()
+        if simular:
+            argumentos += ["--simular"]
+        self._envio_executar(
+            argumentos,
+            f"Vigia Contínuo ativo (a cada {intervalo}s) — monitorando DIAGRAMADO...",
         )
 
     def _envio_continuar(self):
@@ -1227,7 +1278,7 @@ class JanelaOrganizador:
             argumentos = argumentos + ["--simular"]
         elif not messagebox.askyesno(
             "Continuar o envio",
-            "Continua de quem ainda não foi enviado.\nSobe fotos, grava o link e manda o e-mail.\n\nContinuar?",
+            "Continua de quem ainda não foi enviado.\nSobe fotos, grava o link, manda o e-mail e atualiza Coluna K/SGE.\n\nContinuar?",
         ):
             return
         self._envio_executar(
