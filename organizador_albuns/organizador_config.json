@@ -1,19 +1,26 @@
 {
   "link": "https://docs.google.com/spreadsheets/d/1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0/edit?usp=sharing",
   "planilha": "",
-  "aba": "Página48",
-  "col_plano": "D",
-  "col_nome": "A",
-  "col_codigo": "C",
+  "aba": "GERAL ENVIOS",
+  "col_plano": "F",
+  "col_nome": "C",
+  "col_codigo": "E",
   "origem": "D:/ÁLBUNS COLAÇÃO 2025.2",
   "destino": "C:\\Users\\REIS\\Documents\\PAPA 2\\LOTE 17",
   "plano": "",
   "tamanhos": [
+    "20X20",
+    "24X34",
+    "30X20",
     "30X22"
   ],
   "categorias": [
     "CAPAS",
+    "ESTOJO",
     "LAMINAS",
     "POSTERS"
-  ]
+  ],
+  "envio_intervalo": 60,
+  "envio_atualizar_planilha": true,
+  "envio_baixa_sge": true
 }
