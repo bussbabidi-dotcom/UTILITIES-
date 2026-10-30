@@ -55,29 +55,30 @@ TAMANHOS = ["20X20", "24X34", "30X20", "30X22"]
 CATEGORIAS = ["CAPAS", "ESTOJO", "LAMINAS", "POSTERS"]
 LETRAS = list(string.ascii_uppercase)
 
-FUNDO = "#000000"
-VERDE = "#00ff41"
-VERDE_FORTE = "#b6ffb6"
-VERDE_FRACO = "#1f8f3a"
-BORDA = "#145214"
-BOTAO = "#031403"
-BOTAO_ATIVO = "#0a2a0a"
-SELECAO = "#0d3d0d"
-AVISO = "#e6ff4a"
-ERRO = "#ff5f5f"
-FONTE = ("Consolas", 10)
-FONTE_NEGRITO = ("Consolas", 10, "bold")
+# Tema Visual Moderno (Estilo Preview Monitor Contínuo — Sem Tema Hacker)
+FUNDO = "#F8FAFC"          # Slate-50 (Fundo limpo da Preview)
+VERDE = "#0F172A"          # Slate-900 (Texto principal escuro e nítido)
+VERDE_FORTE = "#2563EB"    # Blue-600 (Destaque / Ação Primária da Preview)
+VERDE_FRACO = "#64748B"    # Slate-500 (Texto secundário / legendas)
+BORDA = "#CBD5E1"          # Slate-300 (Bordas suaves de cartões)
+BOTAO = "#FFFFFF"          # Branco puro (Superfície de botões e cartões)
+BOTAO_ATIVO = "#EFF6FF"    # Blue-50 (Hover / Ativo suave)
+SELECAO = "#DBEAFE"        # Blue-100 (Seleção de linhas e listas)
+AVISO = "#D97706"          # Amber-600 (Avisos / Em Impressão)
+ERRO = "#DC2626"           # Red-600 (Erros / Parar)
+FONTE = ("Segoe UI", 10)
+FONTE_NEGRITO = ("Segoe UI", 10, "bold")
 
 
 def aplicar_tema_terminal(root):
-    """Preto e verde, no mesmo espírito do terminal do Windows."""
+    """Tema Moderno da Preview (Slate Claro, Azul Royal e Esmeralda — Fim do Tema Hacker)."""
 
     root.configure(background=FUNDO)
-    root.option_add("*TCombobox*Listbox.background", FUNDO)
+    root.option_add("*TCombobox*Listbox.background", "#FFFFFF")
     root.option_add("*TCombobox*Listbox.foreground", VERDE)
     root.option_add("*TCombobox*Listbox.selectBackground", SELECAO)
     root.option_add("*TCombobox*Listbox.selectForeground", VERDE_FORTE)
-    root.option_add("*TCombobox*Listbox.font", "Consolas 10")
+    root.option_add("*TCombobox*Listbox.font", "SegoeUI 10")
 
     estilo = ttk.Style(root)
     try:
@@ -90,10 +91,10 @@ def aplicar_tema_terminal(root):
         background=FUNDO,
         foreground=VERDE,
         font=FONTE,
-        troughcolor=FUNDO,
+        troughcolor="#E2E8F0",
         bordercolor=BORDA,
-        lightcolor=FUNDO,
-        darkcolor=FUNDO,
+        lightcolor="#FFFFFF",
+        darkcolor=BORDA,
     )
     estilo.configure("TFrame", background=FUNDO)
     estilo.configure("TLabel", background=FUNDO, foreground=VERDE, font=FONTE)
@@ -105,28 +106,28 @@ def aplicar_tema_terminal(root):
         bordercolor=BORDA,
         relief="solid",
     )
-    estilo.configure("TLabelframe.Label", background=FUNDO, foreground=VERDE, font=FONTE_NEGRITO)
+    estilo.configure("TLabelframe.Label", background=FUNDO, foreground=VERDE_FORTE, font=FONTE_NEGRITO)
     estilo.configure(
         "TButton",
         background=BOTAO,
         foreground=VERDE,
         bordercolor=BORDA,
         focusthickness=1,
-        focuscolor=VERDE,
-        padding=(10, 4),
+        focuscolor=VERDE_FORTE,
+        padding=(10, 5),
         font=FONTE_NEGRITO,
     )
     estilo.map(
         "TButton",
-        background=[("pressed", BORDA), ("active", BOTAO_ATIVO), ("disabled", FUNDO)],
+        background=[("pressed", SELECAO), ("active", BOTAO_ATIVO), ("disabled", FUNDO)],
         foreground=[("disabled", VERDE_FRACO), ("pressed", VERDE_FORTE), ("active", VERDE_FORTE)],
-        bordercolor=[("active", VERDE), ("focus", VERDE)],
+        bordercolor=[("active", VERDE_FORTE), ("focus", VERDE_FORTE)],
     )
-    estilo.configure("Perigo.TButton", foreground=ERRO, bordercolor="#5a1515")
+    estilo.configure("Perigo.TButton", foreground=ERRO, bordercolor="#FCA5A5", background="#FEF2F2")
     estilo.map(
         "Perigo.TButton",
-        background=[("pressed", "#2a0808"), ("active", "#1a0808"), ("disabled", FUNDO)],
-        foreground=[("disabled", "#5a1515"), ("active", "#ffb0b0")],
+        background=[("pressed", "#FEE2E2"), ("active", "#FEE2E2"), ("disabled", FUNDO)],
+        foreground=[("disabled", "#FCA5A5"), ("active", "#B91C1C")],
         bordercolor=[("active", ERRO), ("focus", ERRO)],
     )
     estilo.configure(

@@ -34,33 +34,34 @@ RELATORIO = PASTA / "baixa_sge.csv"
 STATUS_DA_PLANILHA = "(usar o da planilha)"
 SEM_COLUNA = "(nenhuma)"
 
-COR_FUNDO = "#000000"
-COR_CAIXA = "#000000"
-COR_TEXTO = "#00ff41"
-COR_FORTE = "#b6ffb6"
-COR_FRACO = "#1f8f3a"
-COR_BORDA = "#145214"
-COR_BOTAO = "#031403"
-COR_BOTAO_ATIVO = "#0a2a0a"
-COR_SELECAO = "#0d3d0d"
-COR_VERDE = "#b6ffb6"
-COR_VERMELHO = "#ff5f5f"
-COR_CINZA = "#1f8f3a"
-COR_AVISO = "#e6ff4a"
-FONTE = ("Consolas", 9)
-FONTE_NEGRITO = ("Consolas", 9, "bold")
+# Tema Visual Moderno (Estilo Preview Monitor Contínuo — Sem Tema Hacker)
+COR_FUNDO = "#F8FAFC"          # Slate-50 (Fundo limpo da Preview)
+COR_CAIXA = "#FFFFFF"          # Branco puro (Campos e caixas de listagem)
+COR_TEXTO = "#0F172A"          # Slate-900 (Texto principal escuro e nítido)
+COR_FORTE = "#2563EB"          # Blue-600 (Destaque / Ação Primária da Preview)
+COR_FRACO = "#64748B"          # Slate-500 (Texto secundário / legendas)
+COR_BORDA = "#CBD5E1"          # Slate-300 (Bordas suaves)
+COR_BOTAO = "#FFFFFF"          # Branco puro (Superfície de botões)
+COR_BOTAO_ATIVO = "#EFF6FF"    # Blue-50 (Hover / Ativo)
+COR_SELECAO = "#DBEAFE"        # Blue-100 (Seleção)
+COR_VERDE = "#059669"          # Emerald-600 (Sucesso / Aprovado / Iniciar)
+COR_VERMELHO = "#DC2626"       # Red-600 (Erro / Parar)
+COR_CINZA = "#475569"          # Slate-600 (Ações secundárias)
+COR_AVISO = "#D97706"          # Amber-600 (Avisos / Em Impressão)
+FONTE = ("Segoe UI", 9)
+FONTE_NEGRITO = ("Segoe UI", 9, "bold")
 
 
 def aplicar_tema_terminal(root):
-    """Preto e verde, no mesmo espírito do terminal do Windows."""
+    """Tema Moderno da Preview (Slate Claro, Azul Royal e Esmeralda — Fim do Tema Hacker)."""
 
     root.configure(background=COR_FUNDO)
-    root.option_add("*Font", "Consolas 9")
-    root.option_add("*TCombobox*Listbox.background", COR_FUNDO)
+    root.option_add("*Font", "SegoeUI 9")
+    root.option_add("*TCombobox*Listbox.background", COR_CAIXA)
     root.option_add("*TCombobox*Listbox.foreground", COR_TEXTO)
     root.option_add("*TCombobox*Listbox.selectBackground", COR_SELECAO)
     root.option_add("*TCombobox*Listbox.selectForeground", COR_FORTE)
-    root.option_add("*TCombobox*Listbox.font", "Consolas 9")
+    root.option_add("*TCombobox*Listbox.font", "SegoeUI 9")
 
     estilo = ttk.Style(root)
     try:
@@ -73,16 +74,16 @@ def aplicar_tema_terminal(root):
         background=COR_FUNDO,
         foreground=COR_TEXTO,
         font=FONTE,
-        troughcolor=COR_FUNDO,
+        troughcolor="#E2E8F0",
         bordercolor=COR_BORDA,
-        lightcolor=COR_FUNDO,
-        darkcolor=COR_FUNDO,
+        lightcolor=COR_CAIXA,
+        darkcolor=COR_BORDA,
     )
     estilo.configure("TFrame", background=COR_FUNDO)
     estilo.configure("TLabel", background=COR_FUNDO, foreground=COR_TEXTO, font=FONTE)
     estilo.configure(
         "TCombobox",
-        fieldbackground=COR_FUNDO,
+        fieldbackground=COR_CAIXA,
         background=COR_BOTAO,
         foreground=COR_TEXTO,
         arrowcolor=COR_TEXTO,
@@ -92,7 +93,7 @@ def aplicar_tema_terminal(root):
     )
     estilo.map(
         "TCombobox",
-        fieldbackground=[("readonly", COR_FUNDO), ("disabled", COR_FUNDO)],
+        fieldbackground=[("readonly", COR_CAIXA), ("disabled", COR_FUNDO)],
         foreground=[("readonly", COR_TEXTO), ("disabled", COR_FRACO)],
         selectbackground=[("readonly", COR_SELECAO)],
         selectforeground=[("readonly", COR_FORTE)],
@@ -102,9 +103,9 @@ def aplicar_tema_terminal(root):
     estilo.configure(
         "Vertical.TScrollbar",
         background=COR_BOTAO,
-        troughcolor=COR_FUNDO,
+        troughcolor="#E2E8F0",
         arrowcolor=COR_TEXTO,
-        bordercolor=COR_FUNDO,
+        bordercolor=COR_BORDA,
     )
     estilo.map("Vertical.TScrollbar", background=[("active", COR_BOTAO_ATIVO)])
 
