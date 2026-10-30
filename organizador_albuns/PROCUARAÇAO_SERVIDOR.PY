@@ -622,28 +622,45 @@ def cabecalhos_planilha(sheet, coluna_plano=None):
         "tipo de album",
     }
 
+    linhas_amostra = list(sheet.iter_rows(max_row=60, values_only=True))
+
     for numero, linha in enumerate(
-        sheet.iter_rows(max_row=20, values_only=True),
+        linhas_amostra[:20],
         start=1,
     ):
 
         colunas = {}
+        candidatos_nome = []
 
         for indice, valor in enumerate(linha, start=1):
 
             texto = normalizar(valor)
 
             if texto in nomes:
+                candidatos_nome.append((0 if texto == "nome" else 1, indice))
 
-                colunas["nome"] = indice
-
-            if texto in codigos:
+            if texto in codigos and "codigo" not in colunas:
 
                 colunas["codigo"] = indice
 
-            if texto in planos:
+            if texto in planos and "plano" not in colunas:
 
                 colunas["plano"] = indice
+
+        if candidatos_nome:
+            melhor_ind = None
+            melhor_chave = None
+            for prio, ind in candidatos_nome:
+                preenchidas = sum(
+                    1
+                    for l_amostra in linhas_amostra[numero:]
+                    if ind <= len(l_amostra) and normalizar(l_amostra[ind - 1])
+                )
+                chave = (preenchidas > 0, -prio, preenchidas, -ind)
+                if melhor_chave is None or chave > melhor_chave:
+                    melhor_chave = chave
+                    melhor_ind = ind
+            colunas["nome"] = melhor_ind
 
         if "nome" in colunas and ("plano" in colunas or coluna_plano):
 
