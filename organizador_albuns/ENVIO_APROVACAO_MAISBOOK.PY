@@ -120,19 +120,60 @@ def tirar_print(pagina, nome):
 # ==========================================================
 
 COLUNA_CODIGO = 9
+NOMES_CABECALHO_CLIENTE = (
+    "nome",
+    "nome completo",
+    "nome do cliente",
+    "nome do aluno",
+    "nome do formando",
+    "cliente",
+    "aluno",
+    "formando",
+)
+
+
+def limpar_sge(valor):
+    texto = str(valor or "").strip()
+    if texto.upper().startswith("633."):
+        texto = texto[4:].strip()
+    texto = re.sub(r"\.\d+$", "", texto)
+    return texto.strip()
 
 
 def cabecalho_da_folha(folha):
-    """Acha a linha que tem CLIENTE, SGE, TAMANHO e STATUS juntos."""
+    """Acha a linha que tem NOME/CLIENTE, SGE, TAMANHO e STATUS juntos, priorizando a coluna de nome preenchida."""
 
-    for numero, linha in enumerate(folha.iter_rows(max_row=40, values_only=True), start=1):
+    linhas_amostra = list(folha.iter_rows(max_row=80, values_only=True))
+    for numero, linha in enumerate(linhas_amostra[:40], start=1):
         textos = [normalizar(valor) for valor in linha]
-        if not {"cliente", "sge", "tamanho", "status"} <= set(textos):
+        conjunto = set(textos)
+        if not {"sge", "tamanho", "status"} <= conjunto:
             continue
+        candidatos_nome = [
+            (0 if texto == "nome" else 1, i + 1)
+            for i, texto in enumerate(textos)
+            if texto in NOMES_CABECALHO_CLIENTE
+        ]
+        if not candidatos_nome:
+            continue
+
+        melhor_nome = candidatos_nome[0][1]
+        melhor_chave = None
+        for prio, ind in candidatos_nome:
+            preenchidas = sum(
+                1
+                for l_abaixo in linhas_amostra[numero:]
+                if ind <= len(l_abaixo) and normalizar(l_abaixo[ind - 1])
+            )
+            chave = (preenchidas > 0, -prio, preenchidas, -ind)
+            if melhor_chave is None or chave > melhor_chave:
+                melhor_chave = chave
+                melhor_nome = ind
+
         contrato = next((i + 1 for i, texto in enumerate(textos) if texto in ("cont", "contrato", "ctt")), 0)
         codigo = textos.index("maisbook") + 1 if "maisbook" in textos else COLUNA_CODIGO
         return numero, {
-            "nome": textos.index("cliente") + 1,
+            "nome": melhor_nome,
             "sge": textos.index("sge") + 1,
             "tamanho": textos.index("tamanho") + 1,
             "status": textos.index("status") + 1,
@@ -166,12 +207,15 @@ def ler_diagramados():
     caminho = proc.baixar_planilha_link(PLANILHA_LINK, PLANILHA)
     livro = proc.load_workbook(caminho, data_only=True)
     melhor = None
+    aba_padrao = None
     for nome in livro.sheetnames:
         folha = livro[nome]
         achado = cabecalho_da_folha(folha)
         if not achado:
             continue
         linha_cab, colunas = achado
+        if aba_padrao is None:
+            aba_padrao = (0, nome, linha_cab, colunas)
         qtd = 0
         for numero, linha in enumerate(folha.iter_rows(values_only=True), start=1):
             if numero <= linha_cab:
@@ -180,9 +224,11 @@ def ler_diagramados():
                 qtd += 1
         if melhor is None or qtd > melhor[0]:
             melhor = (qtd, nome, linha_cab, colunas)
-    if not melhor or melhor[0] == 0:
+    if not melhor:
+        melhor = aba_padrao
+    if not melhor:
         livro.close()
-        raise ValueError("Não achei uma aba com STATUS = DIAGRAMADO")
+        raise ValueError("Não achei uma aba com o cabeçalho NOME/CLIENTE, SGE, TAMANHO e STATUS")
 
     _, nome_aba, linha_cab, colunas = melhor
     folha = livro[nome_aba]
@@ -193,7 +239,7 @@ def ler_diagramados():
         if normalizar(celula(linha, colunas["status"])) != "diagramado":
             continue
         nome = celula(linha, colunas["nome"]).strip()
-        sge = celula(linha, colunas["sge"]).strip()
+        sge = limpar_sge(celula(linha, colunas["sge"]))
         plano = celula(linha, colunas["tamanho"]).strip()
         if not nome or not re.fullmatch(r"\d+", sge):
             continue
@@ -203,6 +249,8 @@ def ler_diagramados():
             "contrato": so_contrato(celula(linha, colunas["contrato"])),
             "codigo": re.sub(r"\s+", "", celula(linha, colunas["codigo"])).upper(),
             "linha": numero,
+            "aba": nome_aba,
+            "col_status": colunas["status"],
             "planos": [],
             "tamanhos": [],
             "avisos": [],
@@ -220,8 +268,9 @@ def ler_diagramados():
             pessoa["avisos"].append("sem código MaisBook na coluna I — pesquisado pelo SGE")
         if not pessoa["contrato"]:
             pessoa["avisos"].append("sem contrato na planilha — conferido pelo SGE")
-    print(f"Aba: {nome_aba} | STATUS DIAGRAMADO: {len(lista)}")
+    print(f"Aba: {nome_aba} (coluna Nome={colunas['nome']}, SGE={colunas['sge']}, Status={colunas['status']}) | STATUS DIAGRAMADO: {len(lista)}")
     return lista
+
 
 
 # ==========================================================
@@ -1101,7 +1150,169 @@ def enviar_email(pagina, pessoa):
 
 
 # ==========================================================
-# Execução
+# Atualização da Coluna K (Aguardando Aprovação) + Baixa SGE
+# ==========================================================
+
+ORDEM_COLUNA_K = [
+    "Sem álbum",
+    "AGUARDANDO FOTO",
+    "EM DIAGRAMAÇÃO",
+    "DIAGRAMADO",
+    "Aguardando Aprovação",
+    "Com Modificações",
+    "Aprovado",
+    "IMPRESSÃO",
+    "Finalizado",
+]
+
+
+def indice_etapa_k(valor):
+    alvo = normalizar(valor)
+    for idx, etapa in enumerate(ORDEM_COLUNA_K):
+        if normalizar(etapa) == alvo:
+            return idx
+    return -1
+
+
+def atualizar_status_planilha(contexto, pessoa, novo_status="Aguardando Aprovação"):
+    """
+    Atualiza a Coluna K (STATUS) da pessoa para 'Aguardando Aprovação' na planilha do Google
+    (e na cópia local), respeitando a regra de que a Coluna K só anda para baixo.
+    """
+    from openpyxl.utils import get_column_letter
+
+    aba = pessoa.get("aba") or "GERAL ENVIOS"
+    linha_num = int(pessoa.get("linha") or 0)
+    col_status = int(pessoa.get("col_status") or 11)
+    if linha_num < 1:
+        return "linha inválida"
+
+    # 1. Atualiza na cópia local .xlsx se existir
+    try:
+        if PLANILHA.is_file():
+            wb = proc.load_workbook(PLANILHA)
+            if aba in wb.sheetnames:
+                ws = wb[aba]
+                atual_local = ws.cell(row=linha_num, column=col_status).value
+                idx_atual = indice_etapa_k(atual_local)
+                idx_novo = indice_etapa_k(novo_status)
+                if idx_atual < idx_novo and idx_atual not in (7, 8):
+                    ws.cell(row=linha_num, column=col_status, value=novo_status)
+                    wb.save(PLANILHA)
+            wb.close()
+    except Exception:
+        pass
+
+    # 2. Atualiza no Google Sheets usando o navegador já autenticado na conta Google
+    letra_col = get_column_letter(col_status)
+    ref_celula = f"{letra_col}{linha_num}"
+    plan_pag = None
+    criou_aba = False
+    try:
+        for pag in contexto.pages:
+            if "/spreadsheets/d/" in (pag.url or ""):
+                plan_pag = pag
+                break
+        if plan_pag is None:
+            plan_pag = contexto.new_page()
+            criou_aba = True
+            plan_pag.goto(PLANILHA_LINK, wait_until="domcontentloaded", timeout=60000)
+
+        caixa = plan_pag.locator("#t-name-box")
+        caixa.first.wait_for(state="visible", timeout=25000)
+        caixa.first.click()
+        caixa.first.fill("'" + aba.replace("'", "''") + "'!" + ref_celula)
+        caixa.first.press("Enter")
+        plan_pag.wait_for_timeout(500)
+
+        try:
+            atual_barra = (
+                plan_pag.locator("#t-formula-bar-input")
+                .first.inner_text(timeout=3000)
+                .replace("\ufeff", "")
+                .replace("\u200b", "")
+                .strip()
+            )
+        except Exception:
+            atual_barra = ""
+
+        idx_atual = indice_etapa_k(atual_barra)
+        idx_novo = indice_etapa_k(novo_status)
+        if idx_atual in (7, 8) or (idx_atual >= idx_novo and idx_atual != -1):
+            print(f"    planilha: Coluna K ({ref_celula}) já está em '{atual_barra}' (não retrocede)")
+            return f"Coluna K mantida em {atual_barra}"
+
+        plan_pag.keyboard.type(novo_status, delay=10)
+        plan_pag.keyboard.press("Delete")
+        plan_pag.keyboard.press("Enter")
+        plan_pag.wait_for_timeout(700)
+        print(f"    planilha: Coluna K ({ref_celula}) atualizada para '{novo_status}'")
+        return f"Coluna K ({ref_celula}) -> {novo_status}"
+    except Exception as erro:
+        aviso = f"não consegui editar a célula {ref_celula} direto no Google Sheets ({base.erro_curto(erro)})"
+        print(f"    aviso planilha: {aviso}")
+        return aviso
+    finally:
+        if criou_aba and plan_pag is not None:
+            try:
+                plan_pag.close()
+            except Exception:
+                pass
+
+
+def dar_baixa_sge_enviado(playwright, pessoa, estado_sge):
+    """
+    Aciona o robô do SGE (baixa_sge/BAIXA.PY) para registrar 'Enviado para Aprovação'
+    para o formando assim que o álbum é enviado no MaisBook.
+    """
+    try:
+        if estado_sge.get("robo") is None:
+            sge_cfg = base.carregar_config()
+            sge_cfg["etapa"] = "Enviado para Aprovação"
+            sge_contexto, sge_pagina = base.abrir_navegador(playwright)
+            robo_sge = base.Robo(sge_contexto, sge_pagina, sge_cfg, True, False)
+            sge_pagina.on("dialog", robo_sge._dialogo)
+            contas_sge = base.ContasSGE()
+            base.ir(sge_pagina, sge_cfg["url_clientes"], robo_sge.timeout)
+            base.garantir_login(robo_sge, contas_sge, PARAR)
+            estado_sge["robo"] = robo_sge
+            estado_sge["contas"] = contas_sge
+            estado_sge["contexto"] = sge_contexto
+            estado_sge["cfg"] = sge_cfg
+
+        robo_sge = estado_sge["robo"]
+        contas_sge = estado_sge["contas"]
+        sge_cfg = estado_sge["cfg"]
+        sge_cfg["etapa"] = "Enviado para Aprovação"
+
+        aluno_sge = {
+            "sge": pessoa["sge"],
+            "nome_planilha": pessoa["nome"],
+            "status_coluna_k": "Aguardando Aprovação",
+            "etapa_sge": "Enviado para Aprovação",
+        }
+        status_sge, nome_sge, det_sge, _ = base.processar_com_contas(robo_sge, contas_sge, aluno_sge)
+        if status_sge in ("CONCLUIDO", "JA ESTAVA"):
+            feitos_sge = base.carregar_feitos()
+            feitos_sge[pessoa["sge"]] = {
+                "nome": nome_sge or pessoa["nome"],
+                "etapa": "Enviado para Aprovação",
+                "status_coluna_k": "Aguardando Aprovação",
+                "data": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
+                "status": status_sge,
+            }
+            base.salvar_feitos(feitos_sge)
+        resumo_sge = f"SGE: {status_sge} (Enviado para Aprovação)" + (f" — {det_sge}" if det_sge else "")
+        print(f"    {resumo_sge}")
+        return resumo_sge
+    except Exception as erro:
+        aviso = f"SGE erro: {base.erro_curto(erro)}"
+        print(f"    {aviso}")
+        return aviso
+
+
+# ==========================================================
+# Execução e Modo Vigia Contínuo
 # ==========================================================
 
 def linha_relatorio(pessoa, achados, resultado, mensagem):
@@ -1134,44 +1345,53 @@ def analisar_argumentos():
     parser.add_argument("--simular", action="store_true", help="procura e abre o cliente, sem pasta, sem arquivo e sem e-mail")
     parser.add_argument("--continuar", action="store_true", help="retoma quem ainda não foi enviado")
     parser.add_argument("--listar", action="store_true", help="só lista quem está com STATUS DIAGRAMADO")
+    parser.add_argument("--vigia", action="store_true", help="monitora continuamente a planilha e envia automaticamente quem entrar como DIAGRAMADO")
+    parser.add_argument("--intervalo", type=int, default=60, help="segundos entre cada verificação no modo --vigia (padrão: 60)")
+    parser.add_argument("--sem-planilha", action="store_true", help="não atualiza a Coluna K para Aguardando Aprovação após enviar")
+    parser.add_argument("--sem-sge", action="store_true", help="não dá baixa automática no SGE (Enviado para Aprovação) após enviar")
     return parser.parse_args()
 
 
-def main():
-    args = analisar_argumentos()
+def executar_rodada(args, em_vigia=False):
     feitos = carregar_json(FEITOS)
     pessoas = ler_diagramados()
     if args.sge:
-        codigo = args.sge.split(".")[-1]
+        codigo = limpar_sge(args.sge)
         pessoas = [pessoa for pessoa in pessoas if pessoa["sge"] == codigo]
         if not pessoas:
             print(f"O código {args.sge} não está com STATUS DIAGRAMADO.")
-            return
+            return 0
     if args.listar:
         for pessoa in pessoas:
             marca = "JÁ ENVIADO" if pessoa["sge"] in feitos else "PENDENTE"
             print(f"linha {pessoa['linha']}: SGE {pessoa['sge']} — {pessoa['nome']} | "
+                  f"código MB {pessoa.get('codigo') or '-'} | "
                   f"{', '.join(pessoa['tamanhos']) or '(plano não identificado)'} | {marca}")
-        print(f"\nTotal: {len(pessoas)}")
-        return
+        print(f"\nTotal com STATUS DIAGRAMADO: {len(pessoas)}")
+        return len(pessoas)
+
     ja_enviadas = [pessoa for pessoa in pessoas if pessoa["sge"] in feitos]
     pessoas = [pessoa for pessoa in pessoas if pessoa["sge"] not in feitos]
     if ja_enviadas:
-        print(f"Já enviadas, sem mandar de novo: {', '.join(pessoa['sge'] for pessoa in ja_enviadas)}")
+        print(f"Já enviadas, sem mandar de novo ({len(ja_enviadas)}): {', '.join(pessoa['sge'] for pessoa in ja_enviadas)}")
     if args.continuar:
         print(f"Continuando com {len(pessoas)} pessoa(s).")
     if args.limite:
         pessoas = pessoas[: args.limite]
 
     print("=" * 70)
-    print("ENVIO DE ÁLBUM PARA APROVAÇÃO —", "SIMULAÇÃO" if args.simular else "ENVIO REAL")
-    print(f"Pessoas: {len(pessoas)}")
+    print(
+        "ENVIO DE ÁLBUM PARA APROVAÇÃO —",
+        "SIMULAÇÃO" if args.simular else ("MODO VIGIA CONTÍNUO" if em_vigia else "ENVIO REAL"),
+    )
+    print(f"Pessoas pendentes com STATUS DIAGRAMADO: {len(pessoas)}")
     print("=" * 70)
     if not pessoas:
-        print("Nenhuma pessoa para processar.")
-        return
+        print("Nenhuma pessoa pendente para processar agora.")
+        return 0
 
-    PARAR.unlink(missing_ok=True)
+    if not em_vigia:
+        PARAR.unlink(missing_ok=True)
     print("\n" + "=" * 70)
     print("FASE 1 — SERVIDOR (capa e álbum)")
     print("=" * 70)
@@ -1209,17 +1429,19 @@ def main():
     if not prontos:
         print("\nNinguém com capa e álbum completos — o MaisBook não foi aberto.")
         print(f"RELATORIO: {RELATORIO}")
-        return
+        return 0
 
     from playwright.sync_api import sync_playwright
 
     print("\n" + "=" * 70)
-    print("FASE 2 — MAISBOOK (um aluno por vez)")
+    print("FASE 2 — MAISBOOK + PLANILHA (Coluna K) + SGE (um aluno por vez)")
     print("=" * 70)
+    enviados_rodada = 0
     with sync_playwright() as p:
         contexto = abrir_navegador(p)
         pagina = contexto.pages[0] if contexto.pages else contexto.new_page()
         pagina.on("dialog", no_dialogo)
+        estado_sge = {"robo": None, "contas": None, "contexto": None, "cfg": None}
         try:
             for numero, (pessoa, achados) in enumerate(prontos, start=1):
                 if pediu_parar():
@@ -1242,13 +1464,36 @@ def main():
                         ir_clientes(pagina, termo_busca(pessoa))
                         confirmacao = enviar_email(pagina, pessoa)
                         print(f"    enviado — {confirmacao}")
+
+                        extras_msg = [confirmacao]
+                        if not getattr(args, "sem_planilha", False):
+                            info_plan = atualizar_status_planilha(contexto, pessoa, "Aguardando Aprovação")
+                            if info_plan:
+                                extras_msg.append(info_plan)
+                            try:
+                                pagina.bring_to_front()
+                            except Exception:
+                                pass
+
+                        if not getattr(args, "sem_sge", False):
+                            info_sge = dar_baixa_sge_enviado(p, pessoa, estado_sge)
+                            if info_sge:
+                                extras_msg.append(info_sge)
+                            try:
+                                pagina.bring_to_front()
+                            except Exception:
+                                pass
+
                         feitos[pessoa["sge"]] = {
                             "nome": pessoa["nome"],
                             "tamanhos": pessoa["tamanhos"],
+                            "status_coluna_k": "Aguardando Aprovação",
+                            "etapa_sge": "Enviado para Aprovação",
                             "data": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
                         }
                         salvar_json(FEITOS, feitos)
-                        linhas.append(linha_relatorio(pessoa, achados, "enviado", confirmacao))
+                        enviados_rodada += 1
+                        linhas.append(linha_relatorio(pessoa, achados, "enviado", " | ".join(extras_msg)))
                 except PararPessoa as parada:
                     imagem = tirar_print(pagina, f"erro_{pessoa['sge']}")
                     detalhe = parada.detalhe + (f" | {imagem}" if imagem else "")
@@ -1269,6 +1514,11 @@ def main():
                     linhas.append(linha_relatorio(pessoa, achados, "erro no Drive", detalhe))
                 salvar_relatorio(linhas)
         finally:
+            if estado_sge.get("contexto") is not None:
+                try:
+                    estado_sge["contexto"].close()
+                except Exception:
+                    pass
             try:
                 contexto.close()
             except Exception:
@@ -1294,6 +1544,42 @@ def main():
         if qtd:
             print(f"{resultado}: {qtd}")
     print("=" * 70)
+    return enviados_rodada
+
+
+def main():
+    args = analisar_argumentos()
+    if args.listar or not args.vigia:
+        executar_rodada(args, em_vigia=False)
+        return
+
+    intervalo = max(10, int(args.intervalo or 60))
+    PARAR.unlink(missing_ok=True)
+    print("=" * 70)
+    print(f"VIGIA CONTÍNUO MAISBOOK INICIADO (intervalo: {intervalo}s)")
+    print("Monitorando STATUS = DIAGRAMADO -> Drive + MaisBook + Coluna K (Aguardando Aprovação) + SGE (Enviado para Aprovação)")
+    print("=" * 70)
+    ciclo = 0
+    try:
+        while not pediu_parar():
+            ciclo += 1
+            print(f"\n[CICLO #{ciclo} — {datetime.now():%d/%m/%Y %H:%M:%S}] Verificando planilha e servidor...")
+            try:
+                executar_rodada(args, em_vigia=True)
+            except Exception as erro:
+                print(f"[AVISO VIGIA] Erro no ciclo #{ciclo}: {erro}")
+            if pediu_parar():
+                break
+            print(f"[VIGIA] Aguardando {intervalo}s para a próxima verificação (use Parar para encerrar)...")
+            for _ in range(intervalo):
+                if pediu_parar():
+                    break
+                time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[VIGIA] Interrompido pelo usuário.")
+    finally:
+        PARAR.unlink(missing_ok=True)
+        print("\n[VIGIA] Monitoramento encerrado.")
 
 
 if __name__ == "__main__":
@@ -1302,3 +1588,4 @@ if __name__ == "__main__":
     except (FileNotFoundError, ValueError) as erro:
         print(f"\nERRO: {erro}")
         sys.exit(1)
+
