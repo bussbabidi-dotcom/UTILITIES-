@@ -600,15 +600,20 @@ class JanelaOrganizador:
         self.gravar_via_chrome = tk.BooleanVar(value=cfg.get("gravar_via_chrome", True))
         self.autosync_ativo = tk.BooleanVar(value=cfg.get("autosync_ativo", False))
 
-        # Filtros e controles do Dashboard
+        # Filtros e controles do Dashboard + Edição por Célula (Estilo Planilha)
         self.dash_busca = tk.StringVar(value="")
         self.dash_filtro_status = tk.StringVar(value="Todos os Status (Col. K)")
         self.dash_filtro_capa = tk.StringVar(value="Todos (Col. M)")
         self.dash_etapa_sge = tk.StringVar(value="(usar o da planilha)")
         self.dash_novo_status_k = tk.StringVar(value="DIAGRAMADO")
         self.dash_resumo_selecionado = tk.StringVar(
-            value="Selecione um formando na tabela para editar colunas, alternar CAPA (Col. M), enviar MaisBook ou dar baixa no SGE."
+            value="Dê duplo-clique em qualquer célula da tabela (ou use F2 / barra fx) para editar direto na célula como no Excel/Google Sheets."
         )
+        self.celula_ativa = None  # (linha_int, id_col)
+        self.editor_celula_widget = None
+        self.dash_ref_celula = tk.StringVar(value="—")
+        self.dash_rotulo_celula = tk.StringVar(value="Selecione ou dê duplo-clique em uma célula")
+        self.dash_valor_fx = tk.StringVar(value="")
 
         self.status = tk.StringVar(value="Carregando painel de controle e planilha...")
         self.combos_aba = []
@@ -913,9 +918,71 @@ class JanelaOrganizador:
         self.lbl_contagem_tabela = ttk.Label(barra_filtro, text="0 alunos listados", style="Fraco.TLabel")
         self.lbl_contagem_tabela.pack(side="right")
 
-        # --- 4. Tabela de Controle de Todos os Alunos ---
+        # --- 3B. Barra de Fórmula / Edição por Célula (fx — Estilo Google Sheets / Excel) ---
+        barra_fx = tk.Frame(
+            aba,
+            bg="#FFFFFF",
+            highlightthickness=1,
+            highlightbackground=BORDA,
+            padx=8,
+            pady=4,
+        )
+        barra_fx.grid(row=3, column=0, sticky="we", pady=(0, 4))
+
+        tk.Label(
+            barra_fx,
+            textvariable=self.dash_ref_celula,
+            bg="#EFF6FF",
+            fg="#1D4ED8",
+            font=("Consolas", 10, "bold"),
+            width=7,
+            padx=6,
+            pady=2,
+            relief="solid",
+            bd=1,
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Label(
+            barra_fx,
+            textvariable=self.dash_rotulo_celula,
+            bg="#FFFFFF",
+            fg=VERDE_FRACO,
+            font=("Segoe UI", 8, "bold"),
+            width=26,
+            anchor="w",
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Label(
+            barra_fx,
+            text="fx",
+            bg="#FFFFFF",
+            fg="#64748B",
+            font=("Georgia", 10, "italic", "bold"),
+        ).pack(side="left", padx=(0, 6))
+
+        self.entry_fx = ttk.Entry(barra_fx, textvariable=self.dash_valor_fx, font=FONTE)
+        self.entry_fx.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.entry_fx.bind("<Return>", lambda _e: self._aplicar_edicao_celula_fx())
+
+        ttk.Button(
+            barra_fx,
+            text="✔ Gravar Célula (Enter)",
+            style="Primario.TButton",
+            command=self._aplicar_edicao_celula_fx,
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Label(
+            barra_fx,
+            text="💡 Duplo-clique ou F2 na célula edita no local (Enter desce · Tab avança)",
+            bg="#FFFFFF",
+            fg=VERDE_FRACO,
+            font=("Segoe UI", 8),
+        ).pack(side="right")
+
+        # --- 4. Tabela de Controle de Todos os Alunos (Edição Direta por Célula) ---
+        aba.rowconfigure(4, weight=1)
         quadro_tabela = ttk.Frame(aba)
-        quadro_tabela.grid(row=3, column=0, sticky="nsew")
+        quadro_tabela.grid(row=4, column=0, sticky="nsew")
         quadro_tabela.columnconfigure(0, weight=1)
         quadro_tabela.rowconfigure(0, weight=1)
 
@@ -943,16 +1010,16 @@ class JanelaOrganizador:
         )
         definicoes_col = [
             ("linha", "Linha", 48, "center", False),
-            ("sge", "SGE (E)", 74, "center", False),
-            ("nome", "Nome do Formando (Col. C)", 230, "w", True),
-            ("contrato", "Contrato (D)", 78, "center", False),
-            ("tamanho", "Tamanho (Col. F)", 135, "w", False),
-            ("curso", "Curso (Col. G)", 120, "w", False),
-            ("cpf", "CPF (Col. H)", 102, "center", False),
-            ("maisbook", "MaisBook (I)", 86, "center", False),
-            ("status_k", "Status (Col. K)", 142, "center", False),
-            ("lote", "Lote (L)", 70, "center", False),
-            ("capa_m", "CAPA (Col. M)", 108, "center", False),
+            ("sge", "SGE (Col. E) ✎", 82, "center", False),
+            ("nome", "Nome do Formando (Col. C) ✎", 230, "w", True),
+            ("contrato", "Contrato (Col. D) ✎", 86, "center", False),
+            ("tamanho", "Tamanho (Col. F) ✎", 140, "w", False),
+            ("curso", "Curso (Col. G) ✎", 120, "w", False),
+            ("cpf", "CPF (Col. H) ✎", 104, "center", False),
+            ("maisbook", "MaisBook (Col. I) ✎", 92, "center", False),
+            ("status_k", "Status (Col. K) ✎", 146, "center", False),
+            ("lote", "Lote (Col. L) ✎", 74, "center", False),
+            ("capa_m", "CAPA (Col. M) ✎", 112, "center", False),
             ("album_srv", "Álbum no Servidor (JPG)", 165, "w", False),
             ("capa_srv", "Capa no Servidor", 145, "w", False),
         ]
@@ -982,7 +1049,10 @@ class JanelaOrganizador:
         scroll_h.grid(row=1, column=0, sticky="we")
 
         self.tabela_alunos.bind("<<TreeviewSelect>>", self._ao_selecionar_aluno_dashboard)
-        self.tabela_alunos.bind("<Double-1>", lambda _e: self._abrir_modal_editar_aluno())
+        self.tabela_alunos.bind("<ButtonRelease-1>", self._ao_clicar_celula_tabela)
+        self.tabela_alunos.bind("<Double-1>", self._ao_duplo_clique_celula_tabela)
+        self.tabela_alunos.bind("<F2>", self._iniciar_edicao_celula_ativa)
+        self.tabela_alunos.bind("<Return>", self._iniciar_edicao_celula_ativa)
 
         # --- 5. Barra Inferior de Controle Individual do Aluno & Reescrita em Tempo Real ---
         painel_ind = ttk.LabelFrame(
@@ -990,7 +1060,7 @@ class JanelaOrganizador:
             text="Controle Individual do Aluno Selecionado — Reescrita em Tempo Real na Planilha + Envio MaisBook + Baixa SGE",
             padding=8,
         )
-        painel_ind.grid(row=4, column=0, sticky="we", pady=(6, 0))
+        painel_ind.grid(row=5, column=0, sticky="we", pady=(6, 0))
         painel_ind.columnconfigure(0, weight=1)
 
         tk.Label(
@@ -1584,6 +1654,219 @@ class JanelaOrganizador:
         if aluno["etapa_k"] in ETAPAS_COLUNA_K:
             self.dash_novo_status_k.set(aluno["etapa_k"])
         self.envio_sge.set(aluno["sge"])
+        if not self.celula_ativa or self.celula_ativa[0] != int(aluno["linha"]):
+            self._selecionar_celula_planilha(int(aluno["linha"]), "nome")
+
+    # --------------------------------------------------------------------------
+    # EDIÇÃO POR CÉLULA DIRETO NA TABELA (ESTILO GOOGLE SHEETS / EXCEL)
+    # --------------------------------------------------------------------------
+    MAPA_COLUNA_TABELA = {
+        "sge": ("E", "Coluna E · SGE", "sge", None),
+        "nome": ("C", "Coluna C · Nome", "nome", None),
+        "contrato": ("D", "Coluna D · Contrato", "contrato", None),
+        "tamanho": ("F", "Coluna F · Tamanho", "tamanho", None),
+        "curso": ("G", "Coluna G · Curso", "curso", None),
+        "cpf": ("H", "Coluna H · CPF", "cpf", None),
+        "maisbook": ("I", "Coluna I · MaisBook", "maisbook", None),
+        "status_k": ("K", "Coluna K · Status", "status_k", ETAPAS_COLUNA_K),
+        "lote": ("L", "Coluna L · Lote", "lote", None),
+        "capa_m": ("M", "Coluna M · CAPA", "capa_m", ["CAPA", "DIAGRAMADO", "OK", "CAPA ENTREGUE", ""]),
+    }
+
+    ORDEM_COLUNAS_EDITAVEIS = [
+        "sge",
+        "nome",
+        "contrato",
+        "tamanho",
+        "curso",
+        "cpf",
+        "maisbook",
+        "status_k",
+        "lote",
+        "capa_m",
+    ]
+
+    def _fechar_editor_celula(self):
+        if self.editor_celula_widget is not None:
+            try:
+                self.editor_celula_widget.destroy()
+            except Exception:
+                pass
+            self.editor_celula_widget = None
+
+    def _selecionar_celula_planilha(self, linha_int, id_col):
+        aluno = self.alunos_por_linha.get(int(linha_int))
+        if not aluno:
+            return
+        if id_col not in self.MAPA_COLUNA_TABELA:
+            id_col = "nome"
+        letra, rotulo, campo_aluno, _opcoes = self.MAPA_COLUNA_TABELA[id_col]
+        self.celula_ativa = (int(linha_int), id_col)
+        self.dash_ref_celula.set(f"{letra}{linha_int}")
+        self.dash_rotulo_celula.set(f"{rotulo} (Linha {linha_int})")
+        self.dash_valor_fx.set(str(aluno.get(campo_aluno, "") or ""))
+
+    def _ao_clicar_celula_tabela(self, event):
+        regiao = self.tabela_alunos.identify("region", event.x, event.y)
+        if regiao != "cell":
+            return
+        iid = self.tabela_alunos.identify_row(event.y)
+        col_num_str = self.tabela_alunos.identify_column(event.x)
+        if not iid or not col_num_str:
+            return
+        col_idx = int(col_num_str.replace("#", "")) - 1
+        colunas = self.tabela_alunos["columns"]
+        if 0 <= col_idx < len(colunas):
+            id_col = colunas[col_idx]
+            if id_col in self.MAPA_COLUNA_TABELA:
+                self._selecionar_celula_planilha(int(iid), id_col)
+
+    def _ao_duplo_clique_celula_tabela(self, event):
+        regiao = self.tabela_alunos.identify("region", event.x, event.y)
+        if regiao != "cell":
+            return
+        iid = self.tabela_alunos.identify_row(event.y)
+        col_num_str = self.tabela_alunos.identify_column(event.x)
+        if not iid or not col_num_str:
+            return
+        col_idx = int(col_num_str.replace("#", "")) - 1
+        colunas = self.tabela_alunos["columns"]
+        if not (0 <= col_idx < len(colunas)):
+            return
+        id_col = colunas[col_idx]
+        if id_col in ("album_srv", "capa_srv"):
+            self.tabela_alunos.selection_set(iid)
+            self._dash_conferir_servidor_individual()
+            return
+        if id_col == "linha":
+            id_col = "nome"
+        self._selecionar_celula_planilha(int(iid), id_col)
+        self._abrir_editor_inline_celula(str(iid), id_col)
+
+    def _iniciar_edicao_celula_ativa(self, _event=None):
+        if not self.celula_ativa:
+            aluno = self._aluno_selecionado_dashboard()
+            if not aluno:
+                return
+            self._selecionar_celula_planilha(int(aluno["linha"]), "nome")
+        linha_int, id_col = self.celula_ativa
+        if self.tabela_alunos.exists(str(linha_int)):
+            self._abrir_editor_inline_celula(str(linha_int), id_col)
+
+    def _abrir_editor_inline_celula(self, iid, id_col):
+        self._fechar_editor_celula()
+        if id_col not in self.MAPA_COLUNA_TABELA:
+            return
+        aluno = self.alunos_por_linha.get(int(iid))
+        if not aluno:
+            return
+
+        self.tabela_alunos.see(iid)
+        caixa = self.tabela_alunos.bbox(iid, id_col)
+        if not caixa:
+            self.entry_fx.focus_set()
+            self.entry_fx.selection_range(0, "end")
+            return
+
+        x, y, largura, altura = caixa
+        letra, rotulo, campo_aluno, opcoes = self.MAPA_COLUNA_TABELA[id_col]
+        valor_atual = str(aluno.get(campo_aluno, "") or "")
+        var_ed = tk.StringVar(value=valor_atual)
+
+        if opcoes is not None:
+            editor = ttk.Combobox(
+                self.tabela_alunos,
+                textvariable=var_ed,
+                values=opcoes,
+                font=FONTE_NEGRITO,
+            )
+        else:
+            editor = tk.Entry(
+                self.tabela_alunos,
+                textvariable=var_ed,
+                font=FONTE_NEGRITO,
+                bg="#EFF6FF",
+                fg="#0F172A",
+                insertbackground="#1D4ED8",
+                relief="solid",
+                bd=2,
+                highlightthickness=1,
+                highlightcolor="#2563EB",
+                highlightbackground="#2563EB",
+            )
+
+        editor.place(x=x, y=y, width=max(largura, 90), height=max(altura, 24))
+        editor.focus_set()
+        try:
+            editor.selection_range(0, "end")
+        except Exception:
+            pass
+        self.editor_celula_widget = editor
+
+        ja_finalizado = {"ok": False}
+
+        def _confirmar_e_mover(direcao=None):
+            if ja_finalizado["ok"]:
+                return
+            ja_finalizado["ok"] = True
+            novo_val = var_ed.get().strip()
+            self._fechar_editor_celula()
+            if novo_val != valor_atual:
+                self.dash_valor_fx.set(novo_val)
+                self._executar_reescrita_planilha(
+                    aluno,
+                    {letra: novo_val},
+                    f"Célula {letra}{aluno['linha']} ({rotulo}) -> '{novo_val or '(vazia)'}' ({aluno['nome']})",
+                )
+            if direcao == "baixo":
+                filhos = list(self.tabela_alunos.get_children())
+                if iid in filhos:
+                    idx_f = filhos.index(iid)
+                    if idx_f + 1 < len(filhos):
+                        prox_iid = filhos[idx_f + 1]
+                        self.tabela_alunos.selection_set(prox_iid)
+                        self._selecionar_celula_planilha(int(prox_iid), id_col)
+            elif direcao in ("direita", "esquerda"):
+                idx_c = self.ORDEM_COLUNAS_EDITAVEIS.index(id_col)
+                novo_idx = (idx_c + (1 if direcao == "direita" else -1)) % len(self.ORDEM_COLUNAS_EDITAVEIS)
+                prox_col = self.ORDEM_COLUNAS_EDITAVEIS[novo_idx]
+                self._selecionar_celula_planilha(int(iid), prox_col)
+                self.root.after(20, lambda: self._abrir_editor_inline_celula(iid, prox_col))
+
+        def _cancelar(_e=None):
+            ja_finalizado["ok"] = True
+            self._fechar_editor_celula()
+
+        editor.bind("<Return>", lambda _e: _confirmar_e_mover("baixo"))
+        editor.bind("<Tab>", lambda _e: (_confirmar_e_mover("direita"), "break")[1])
+        editor.bind("<Shift-Tab>", lambda _e: (_confirmar_e_mover("esquerda"), "break")[1])
+        editor.bind("<Escape>", _cancelar)
+        editor.bind("<FocusOut>", lambda _e: _confirmar_e_mover(None))
+        if opcoes is not None:
+            editor.bind("<<ComboboxSelected>>", lambda _e: _confirmar_e_mover(None))
+
+    def _aplicar_edicao_celula_fx(self):
+        if not self.celula_ativa:
+            messagebox.showinfo(
+                "Edição por Célula",
+                "Clique primeiro em uma célula da tabela para selecioná-la e editar.",
+            )
+            return
+        linha_int, id_col = self.celula_ativa
+        aluno = self.alunos_por_linha.get(int(linha_int))
+        if not aluno or id_col not in self.MAPA_COLUNA_TABELA:
+            return
+        letra, rotulo, campo_aluno, _opcoes = self.MAPA_COLUNA_TABELA[id_col]
+        novo_val = self.dash_valor_fx.get().strip()
+        valor_atual = str(aluno.get(campo_aluno, "") or "").strip()
+        if novo_val == valor_atual:
+            self.status.set(f"Célula {letra}{linha_int} já está com o valor '{novo_val}'.")
+            return
+        self._executar_reescrita_planilha(
+            aluno,
+            {letra: novo_val},
+            f"Célula {letra}{linha_int} ({rotulo}) -> '{novo_val or '(vazia)'}' ({aluno['nome']})",
+        )
 
     # --------------------------------------------------------------------------
     # REESCRITA EM TEMPO REAL DA PLANILHA (TODAS AS COLUNAS DO FORMANDO)
