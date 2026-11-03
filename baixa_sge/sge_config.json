@@ -3,7 +3,7 @@
   "url_clientes": "https://sistema.sge.com.br/SGE/Forms/Cliente.aspx",
   "prefixo_codigo": "633.",
   "planilha": "C:\\Users\\REIS\\Documents\\PAPA 2\\vazio\\BAIXA_TESTE.xlsx",
-  "aba": "ALBUNS COLAÇAO",
+  "aba": "GERAL ENVIOS",
   "linha_inicial": 19,
   "col_sge": "E",
   "col_nome": "C",
@@ -15,6 +15,10 @@
     "ENCADERNA",
     "ALBUM",
     "BOOK",
+    "ENCADERNACAO 20X30 GRAFICA MAIS",
+    "ENCADERNACAO 20X20 GRAFICA MAIS",
+    "ENCADERNACAO 24X34 GRAFICA MAIS",
+    "ENCADERNACAO ALBUM 20X30 GRAFICO MAIS",
     "ENCADERNACAO ALBUM 20X20 GRAFICO MAIS",
     "ENCADERNACAO ALBUM 24X34 GRAFICO MAIS"
   ],
@@ -66,7 +70,12 @@
   "ui_status": "(usar o da planilha)",
   "planilha_link": "https://docs.google.com/spreadsheets/d/1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0/edit?usp=sharing",
   "itens_prioritarios": [
+    "ENCADERNACAO",
+    "ENCADERNACAO 20X30 GRAFICA MAIS",
+    "ENCADERNACAO 20X20 GRAFICA MAIS",
+    "ENCADERNACAO 24X34 GRAFICA MAIS",
     "ENCADERNACAO ALBUM",
+    "ENCADERNACAO ALBUM 20X30 GRAFICO MAIS",
     "ENCADERNACAO ALBUM 20X20 GRAFICO MAIS",
     "ENCADERNACAO ALBUM 24X34 GRAFICO MAIS"
   ],
@@ -117,6 +126,9 @@
   "ui_link": "https://docs.google.com/spreadsheets/d/1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0/edit?usp=sharing",
   "prioritarios_por_planilha": {
     "1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0": [
+      "ENCADERNAÇÃO 20X30 GRÁFICA MAIS",
+      "ENCADERNAÇÃO 20X20 GRÁFICA MAIS",
+      "ENCADERNAÇÃO 24X34 GRÁFICA MAIS",
       "Encadernação Álbum 20x30 Gráfico MAIS",
       "Encadernação Álbum 20x20 Gráfico MAIS",
       "Encadernação Álbum 24x34 Gráfico MAIS"
