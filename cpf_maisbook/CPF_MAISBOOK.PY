@@ -382,15 +382,33 @@ def codigo_maisbook(aluno):
 
 
 def login_maisbook(pagina, timeout_ms):
+    cred = {}
     try:
         cred = json.loads(CREDENCIAIS.read_text(encoding="utf-8"))
     except Exception:
+        pass
+    if cred.get("usuario"):
+        pagina.fill("#user_login", cred.get("usuario", ""))
+    if cred.get("senha"):
+        pagina.fill("#user_pass", cred.get("senha", ""))
+    try:
+        val_user = (pagina.locator("#user_login").first.input_value(timeout=3000) or "").strip()
+    except Exception:
+        val_user = ""
+    if not val_user:
         return False
-    pagina.fill("#user_login", cred.get("usuario", ""))
-    pagina.fill("#user_pass", cred.get("senha", ""))
-    pagina.click("#wp-submit")
+    seletor_btn = (
+        '#wp-submit, button[type="submit"], input[type="submit"], '
+        'button:has-text("Acessar"), button:has-text("Entrar")'
+    )
+    btn = pagina.locator(seletor_btn).first
+    if btn.count():
+        btn.click(timeout=15000)
+    else:
+        pagina.locator("#user_pass").first.press("Enter")
     base.esperar_carregar(pagina, timeout_ms)
-    if pagina.locator("#user_login").count():
+    pagina.wait_for_timeout(1200)
+    if pagina.locator("#user_login").count() and pagina.locator("#user_login").first.is_visible():
         return False
     print("    (login no MaisBook feito automaticamente)")
     return True
