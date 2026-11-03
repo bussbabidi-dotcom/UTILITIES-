@@ -58,6 +58,7 @@
   ],
   "mapa_status": {
     "AGUARDANDO APROVACAO": "Enviado para Aprovação",
+    "DIAGRAMADO": "Enviado para Aprovação",
     "APROVADO": "Aprovado",
     "IMPRESSAO": "Em Impressão",
     "FINALIZADO": "Pronto"
