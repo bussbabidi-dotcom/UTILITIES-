@@ -879,6 +879,7 @@ JS_LISTAR_CARTOES = r"""
       ctt: campo('CTT', 1),
       nome: campo('NOME', 2),
       codigo: campo('CODIGO', 3),
+      album: campo('ALBUM', 10),
     };
   });
 }
@@ -938,6 +939,8 @@ def achar_cliente(pagina, pessoa):
     cliente_id = certos[0]["id"]
     if certos[0].get("sge"):
         pessoa["sge_maisbook"] = certos[0]["sge"].strip()
+    if certos[0].get("album"):
+        pessoa["album_maisbook"] = certos[0]["album"].strip()
     linha = pagina.locator(f'.clientes-grid-row[data-cliente-id="{cliente_id}"]')
     linha.first.wait_for(state="visible", timeout=15000)
     return cliente_id, linha.first
@@ -1338,14 +1341,23 @@ def voltar_para_pasta(pagina, nome):
     if esta_na_pasta(pagina, nome):
         return
     botoes = pagina.locator('[guidedhelpid="folder_path_button"]').filter(has_text=nome)
-    if botoes.count():
-        botoes.first.click()
-        if esperar_entrar(pagina, nome, 12):
-            return
+    for i in range(botoes.count() - 1, -1, -1):
+        btn = botoes.nth(i)
+        try:
+            if btn.is_visible():
+                btn.click(timeout=10000)
+                if esperar_entrar(pagina, nome, 12):
+                    return
+                break
+        except Exception:
+            continue
     if "drive.google.com" in pagina.url:
-        pagina.go_back(timeout=15000)
-        if esperar_entrar(pagina, nome, 12):
-            return
+        try:
+            pagina.go_back(timeout=15000)
+            if esperar_entrar(pagina, nome, 12):
+                return
+        except Exception:
+            pass
     raise PararPessoa("erro no Drive", f"não voltei para a pasta {nome}")
 
 
@@ -1543,19 +1555,35 @@ def colar_link_album(pagina, pessoa, link):
 def enviar_email(pagina, pessoa):
     fechar_edicao(pagina)
     cliente_id, linha = achar_cliente(pagina, pessoa)
+    album_mb = normalizar(pessoa.get("album_maisbook") or "")
+    ja_enviado_mb = "aguardando aprovacao" in album_mb or "aprovado" in album_mb
+
     btn_email = pagina.locator(
         f'button[title="Enviar e-mail"][data-cliente-id="{cliente_id}"], '
         f'button[title*="e-mail" i][data-cliente-id="{cliente_id}"], '
-        f'button[title*="notifica" i][data-cliente-id="{cliente_id}"]'
+        f'button[title*="email" i][data-cliente-id="{cliente_id}"], '
+        f'button[title*="notifica" i][data-cliente-id="{cliente_id}"], '
+        f'button[title*="reenviar" i][data-cliente-id="{cliente_id}"]'
     )
     if not btn_email.count():
-        btn_email = linha.locator('button[title*="e-mail" i], button[title*="notifica" i]')
+        btn_email = linha.locator(
+            'button[title*="e-mail" i], button[title*="email" i], '
+            'button[title*="notifica" i], button[title*="reenviar" i], '
+            'button:has(.dashicons-email), button:has(svg.fa-envelope), button:has(i[class*="envelope"])'
+        )
     if not btn_email.count():
+        if ja_enviado_mb:
+            return f"E-mail já consta como enviado no MaisBook ({pessoa.get('album_maisbook')})"
         raise PararPessoa("erro no e-mail", "não achei o botão Enviar e-mail neste cliente")
-    btn_email.first.scroll_into_view_if_needed()
-    btn_email.first.click(timeout=15000)
-    modal = pagina.locator("#modal-notificacao-cliente")
-    modal.wait_for(state="visible", timeout=15000)
+    try:
+        btn_email.first.scroll_into_view_if_needed()
+        btn_email.first.click(timeout=15000)
+        modal = pagina.locator("#modal-notificacao-cliente")
+        modal.wait_for(state="visible", timeout=15000)
+    except Exception:
+        if ja_enviado_mb:
+            return f"E-mail já consta como enviado no MaisBook ({pessoa.get('album_maisbook')})"
+        raise
     info = modal.locator("#notificacao_cliente_info").inner_text()
     if pessoa["nome"] and not nomes_batem(pessoa["nome"], info):
         try:
@@ -1890,11 +1918,7 @@ def dar_baixa_sge_enviado(playwright, pessoa, estado_sge):
     """
     try:
         arq_baixa = PASTA.parent / "baixa_sge" / "BAIXA.PY"
-        sge_mod = (
-            base
-            if hasattr(base, "processar_com_contas")
-            else SourceFileLoader("baixa_sge_mod", str(arq_baixa)).load_module()
-        )
+        sge_mod = estado_sge.get("mod") or SourceFileLoader("baixa_sge_mod", str(arq_baixa)).load_module()
 
         if estado_sge.get("robo") is None:
             sge_cfg = sge_mod.carregar_config()
