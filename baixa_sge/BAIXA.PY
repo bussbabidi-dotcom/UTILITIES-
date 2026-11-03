@@ -279,42 +279,89 @@ def _aplicar_edicoes_dashboard(caminho_xlsx):
 
 
 def caminho_planilha(cfg):
-    if cfg.get("planilha_link"):
-        arq = baixar_planilha_link(cfg["planilha_link"], PLANILHA_BAIXADA)
+    link = (cfg.get("planilha_link") or "").strip()
+    if link:
+        arq = baixar_planilha_link(link, PLANILHA_BAIXADA)
         _aplicar_edicoes_dashboard(arq)
         return arq
-    caminho = Path(cfg["planilha"])
-    if not caminho.exists():
-        raise FileNotFoundError(f"Planilha não encontrada: {caminho}")
+    caminho_str = (cfg.get("planilha") or "").strip()
+    caminho = Path(caminho_str) if caminho_str else None
+    if not caminho or not caminho.is_file():
+        candidatos = [
+            PASTA.parent / "organizador_albuns" / "planilha_organizador.xlsx",
+            PASTA.parent / "organizador_albuns" / "planilha_envio_aprovacao.xlsx",
+            PLANILHA_BAIXADA,
+        ]
+        for cand in candidatos:
+            if cand.is_file():
+                caminho = cand
+                cfg["planilha"] = str(cand)
+                break
+    if not caminho or not caminho.is_file():
+        link_padrao = CONFIG_PADRAO.get("planilha_link", "")
+        if link_padrao:
+            cfg["planilha_link"] = link_padrao
+            arq = baixar_planilha_link(link_padrao, PLANILHA_BAIXADA)
+            _aplicar_edicoes_dashboard(arq)
+            return arq
+        raise FileNotFoundError(f"Planilha não encontrada: {caminho_str or '(nenhuma configurada)'}")
     _aplicar_edicoes_dashboard(caminho)
     return caminho
 
 
 def ler_planilha(cfg):
     livro = abrir_planilha(caminho_planilha(cfg))
-    if cfg.get("aba") and cfg["aba"] not in livro.sheetnames:
-        raise ValueError(f"A aba '{cfg['aba']}' não existe. Abas: {', '.join(livro.sheetnames)}")
-    folha = livro[cfg["aba"]] if cfg.get("aba") else livro.active
+    aba_cfg = (cfg.get("aba") or "").strip()
+    if aba_cfg and aba_cfg in livro.sheetnames:
+        folha = livro[aba_cfg]
+    else:
+        aba_fallback = next(
+            (n for n in ("GERAL ENVIOS", "ALBUNS COLAÇAO", "ALBUNS COLACAO") if n in livro.sheetnames),
+            livro.active.title if livro.active is not None else livro.sheetnames[0],
+        )
+        if aba_cfg and aba_cfg != aba_fallback:
+            print(f"(aba '{aba_cfg}' não encontrada; usando '{aba_fallback}')")
+        folha = livro[aba_fallback]
+
     colunas = {
         chave: indice_coluna(cfg.get("col_" + chave))
         for chave in ("sge", "nome", "status", "item", "cpf", "maisbook")
     }
-    inicio = int(cfg.get("linha_inicial") or 2)
+    inicio_cfg = int(cfg.get("linha_inicial") or 2)
+
+    linhas_brutas = list(folha.iter_rows(values_only=True))
+    livro.close()
+
+    # Auto-detecta a linha de cabeçalho se houver "SGE" na coluna SGE nas primeiras 35 linhas
+    inicio = inicio_cfg
+    idx_sge = colunas.get("sge")
+    if idx_sge:
+        for num_l, vals in enumerate(linhas_brutas[:35], start=1):
+            if idx_sge <= len(vals):
+                txt_sge = normalizar(valor_celula(vals[idx_sge - 1]))
+                if txt_sge in ("SGE", "COD SGE", "CODIGO SGE", "CODIGO"):
+                    inicio = max(inicio_cfg, num_l + 1)
+                    break
 
     alunos = []
-    for numero, linha in enumerate(folha.iter_rows(min_row=inicio, values_only=True), start=inicio):
+    for numero in range(inicio, len(linhas_brutas) + 1):
+        linha = linhas_brutas[numero - 1]
+
         def pegar(chave):
             indice = colunas.get(chave)
             if not indice or indice > len(linha):
                 return ""
             return valor_celula(linha[indice - 1])
 
-        sge = pegar("sge")
-        if not sge:
+        sge_bruto = pegar("sge")
+        if not sge_bruto:
+            continue
+        sge_limpo = codigo_base(sge_bruto, cfg)
+        if not sge_limpo or normalizar(sge_limpo) in ("SGE", "CODIGO", "COD", "TOTAL") or not re.search(r"\d", sge_limpo):
             continue
         alunos.append({
             "linha": numero,
-            "sge": codigo_base(sge, cfg),
+            "sge": sge_limpo,
             "nome": pegar("nome"),
             "status": pegar("status"),
             "item": pegar("item"),
@@ -322,7 +369,6 @@ def ler_planilha(cfg):
             "maisbook": pegar("maisbook"),
         })
 
-    livro.close()
     return alunos
 
 
@@ -416,9 +462,13 @@ def status_ignorado(status_item, cfg):
 
 MAPA_COLUNA_K_PADRAO = {
     "AGUARDANDO APROVACAO": "Enviado para Aprovação",
+    "ENVIADO PARA APROVACAO": "Enviado para Aprovação",
     "APROVADO": "Aprovado",
     "IMPRESSAO": "Em Impressão",
+    "EM IMPRESSAO": "Em Impressão",
     "FINALIZADO": "Pronto",
+    "PRONTO": "Pronto",
+    "DIAGRAMADO": "Enviado para Aprovação",
 }
 
 ETAPAS_SEM_ACAO_SGE = {
@@ -1697,28 +1747,44 @@ def rodar(cfg, args):
         if not alunos:
             print(f"O código {args.sge} não está na planilha.")
             return
-
-    if not args.status:
-        # Filtra apenas linhas cuja Coluna K tem ação no SGE (Aguardando Aprovação, Aprovado, IMPRESSÃO, Finalizado)
+        if not args.status:
+            for a in alunos:
+                if not status_tem_acao_sge(cfg, a["status"]):
+                    status_orig = a["status"] or "(vazio)"
+                    novo_st = status_desejado(cfg, a["status"])
+                    if not novo_st or normalizar(novo_st) in ETAPAS_SEM_ACAO_SGE:
+                        novo_st = "Enviado para Aprovação"
+                    a["status"] = novo_st
+                    print(
+                        f"ℹ Execução individual (--sge {args.sge}): aluno '{a['nome']}' está com Coluna K='{status_orig}' "
+                        f"-> aplicando '{novo_st}' no SGE."
+                    )
+    elif not args.status:
+        # No lote automático (sem --sge e sem --status fixo), filtra linhas cuja Coluna K tem ação no SGE
         alunos = [a for a in alunos if status_tem_acao_sge(cfg, a["status"])]
 
     feitas = carregar_feitas()
     reenviar = bool(args.mesmo_status)
     marca_reenvio = f"|REENVIO|{data_da_rodada(cfg)}|{normalizar(cfg.get('observacao'))}" if reenviar else ""
     chave = lambda a: f"{a['sge']}|{normalizar(status_desejado(cfg, a['status']))}|{normalizar(a['item'])}{marca_reenvio}"
-    ja_feitos = [a for a in alunos if chave(a) in feitas and not args.refazer]
-    alunos = [a for a in alunos if chave(a) not in feitas or args.refazer]
+    forcar_refazer = bool(args.refazer or args.sge)
+    ja_feitos = [a for a in alunos if chave(a) in feitas and not forcar_refazer]
+    alunos = [a for a in alunos if chave(a) not in feitas or forcar_refazer]
     if args.limite:
         alunos = alunos[: args.limite]
 
     real = not args.simular
     interativo = not args.sem_pausa and terminal_interativo()
     guardar = real and not args.sge and not getattr(args, "vigia", False)
+    origem_planilha = (cfg.get("planilha_link") or "").strip() or (cfg.get("planilha") or "").strip()
+    status_cabecalho = args.status or (
+        f"{alunos[0]['status']} (da planilha)" if (args.sge and len(alunos) == 1) else "(o da planilha)"
+    )
     print("=" * 70)
     print("ROBÔ SGE — ALTERAR STATUS —", "MODO REAL (vai alterar)" if real else "SIMULAÇÃO (clica em Cancelar no fim)")
-    print(f"Planilha: {cfg.get('planilha_link') or cfg['planilha']}")
+    print(f"Planilha: {origem_planilha}")
     print(f"Alunos para processar: {len(alunos)} | já feitos antes: {len(ja_feitos)}")
-    print(f"Status: {args.status or '(o da planilha)'} | data: {data_da_rodada(cfg)} | "
+    print(f"Status: {status_cabecalho} | data: {data_da_rodada(cfg)} | "
           f"observação: {cfg.get('observacao') or '(nenhuma)'}"
           + (" | REENVIO NO MESMO STATUS" if reenviar else ""))
     print("Modo aprender:", "LIGADO (vou perguntar quando não souber)" if interativo else "desligado")
@@ -1990,14 +2056,15 @@ def main():
         print("Aprendizado apagado (caminho até os pedidos, opção do menu e mapa de status).")
         return
 
-    for chave in ("planilha", "aba", "linha_inicial", "col_sge", "col_nome", "col_status", "col_item"):
+    for chave in ("aba", "linha_inicial", "col_sge", "col_nome", "col_status", "col_item"):
         valor = getattr(args, chave)
-        if valor is not None:
+        if valor is not None and str(valor).strip() != "":
             cfg[chave] = valor
-    if args.planilha is not None:
+    if args.planilha is not None and str(args.planilha).strip():
+        cfg["planilha"] = str(args.planilha).strip()
         cfg["planilha_link"] = ""
-    if args.link is not None:
-        cfg["planilha_link"] = args.link
+    if args.link is not None and str(args.link).strip():
+        cfg["planilha_link"] = str(args.link).strip()
     if args.data is not None:
         cfg["data_status"] = args.data
     if args.obs is not None:
