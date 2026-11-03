@@ -2621,6 +2621,35 @@ class JanelaOrganizador:
             args.append("--simular")
         self._envio_executar(args, f"Enviando álbum de {aluno['nome']} (SGE {aluno['sge']}) no MaisBook...")
 
+    def _args_planilha_para_baixa(self):
+        link = self.link.get().strip()
+        arq_local = self.planilha.get().strip()
+        if not link and arq_local and Path(arq_local).is_file():
+            return ["--planilha", arq_local], arq_local
+        link_efetivo = link or LINK_PLANILHA_PADRAO
+        return ["--link", link_efetivo], link_efetivo
+
+    @staticmethod
+    def _traduzir_status_para_sge(etapa_k, status_bruto=""):
+        mapa = {
+            "Aguardando Aprovação": "Enviado para Aprovação",
+            "DIAGRAMADO": "Enviado para Aprovação",
+            "Aprovado": "Aprovado",
+            "IMPRESSÃO": "Em Impressão",
+            "Finalizado": "Pronto",
+            "EM DIAGRAMAÇÃO": "Em Produção",
+        }
+        if etapa_k in mapa:
+            return mapa[etapa_k]
+        t = normalizar_txt(status_bruto)
+        if "aprovado" in t and "aguardando" not in t:
+            return "Aprovado"
+        if "impressao" in t:
+            return "Em Impressão"
+        if "finalizado" in t or "pronto" in t:
+            return "Pronto"
+        return "Enviado para Aprovação"
+
     def _dash_executar_baixa_sge_lote(self):
         if self.processo:
             messagebox.showinfo("Robô em execução", "Já existe uma operação em andamento.")
@@ -2629,7 +2658,7 @@ class JanelaOrganizador:
             messagebox.showerror("Baixa no SGE", f"Script não encontrado:\n{SCRIPT_BAIXA}")
             return
         etapa = self.dash_etapa_sge.get().strip()
-        link = self.link.get().strip() or LINK_PLANILHA_PADRAO
+        args_plan, _ = self._args_planilha_para_baixa()
         aba = self.aba.get().strip() or ABA_PADRAO
 
         if not messagebox.askyesno(
@@ -2642,7 +2671,7 @@ class JanelaOrganizador:
         ):
             return
 
-        args = ["--link", link, "--aba", aba, "--col-sge", "E", "--col-nome", "C", "--col-status", "K", "--col-item", "F"]
+        args = args_plan + ["--aba", aba, "--col-sge", "E", "--col-nome", "C", "--col-status", "K", "--col-item", "F"]
         if etapa and etapa != "(usar o da planilha)":
             args += ["--status", etapa]
         if self.envio_simular.get():
@@ -2653,12 +2682,10 @@ class JanelaOrganizador:
         if self.processo:
             messagebox.showinfo("Robô em execução", "Já existe uma operação em andamento.")
             return
-        link = self.link.get().strip() or LINK_PLANILHA_PADRAO
+        args_plan, _ = self._args_planilha_para_baixa()
         aba = self.aba.get().strip() or ABA_PADRAO
         etapa = self.dash_etapa_sge.get().strip()
-        args = [
-            "--vigia",
-            "--link", link,
+        args = ["--vigia"] + args_plan + [
             "--aba", aba,
             "--col-sge", "E",
             "--col-nome", "C",
@@ -2680,34 +2707,43 @@ class JanelaOrganizador:
             messagebox.showinfo("Baixa no SGE Individual", "Selecione um formando na tabela primeiro.")
             return
         etapa = self.dash_etapa_sge.get().strip()
-        link = self.link.get().strip() or LINK_PLANILHA_PADRAO
+        args_plan, _ = self._args_planilha_para_baixa()
         aba = self.aba.get().strip() or ABA_PADRAO
+
+        if etapa and etapa != "(usar o da planilha)":
+            status_sge_alvo = etapa
+            resumo_status = etapa
+        else:
+            status_sge_alvo = self._traduzir_status_para_sge(aluno.get("etapa_k", ""), aluno.get("status_k", ""))
+            resumo_status = f"{status_sge_alvo} (a partir de '{aluno.get('status_k') or 'DIAGRAMADO'}')"
 
         if not messagebox.askyesno(
             "Baixa Individual no SGE",
             f"Dar baixa no SGE apenas para:\n\n"
             f"Formando: {aluno['nome']}\n"
             f"SGE: {aluno['sge']} | Item/Tamanho: {aluno['tamanho']}\n"
-            f"Status na Coluna K: {aluno['status_k']}\n"
-            f"Status a aplicar no SGE: {etapa}\n\n"
+            f"Status na Coluna K: {aluno['status_k'] or '(vazio)'}\n"
+            f"Status a aplicar no SGE: {resumo_status}\n\n"
             "Continuar?",
         ):
             return
 
-        args = [
-            "--link", link,
+        args = args_plan + [
             "--aba", aba,
             "--col-sge", "E",
             "--col-nome", "C",
             "--col-status", "K",
             "--col-item", "F",
             "--sge", str(aluno["sge"]),
+            "--status", status_sge_alvo,
+            "--refazer",
         ]
-        if etapa and etapa != "(usar o da planilha)":
-            args += ["--status", etapa]
         if self.envio_simular.get():
             args.append("--simular")
-        self._baixa_sge_executar(args, f"Dando baixa no SGE para {aluno['nome']} (SGE {aluno['sge']})...")
+        self._baixa_sge_executar(
+            args,
+            f"Dando baixa no SGE ({status_sge_alvo}) para {aluno['nome']} (SGE {aluno['sge']})...",
+        )
 
     def _baixa_sge_executar(self, argumentos, status_msg):
         if not SCRIPT_BAIXA.is_file():
