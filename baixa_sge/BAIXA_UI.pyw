@@ -375,7 +375,7 @@ class Janela:
         self.linha = self._campo(sec, 2, 1, largura=8)
         self._rotulo(sec, "Limite:", 2, 2)
         self.limite = self._campo(sec, 2, 3, largura=6)
-        self.simular = tk.BooleanVar(value=True)
+        self.simular = tk.BooleanVar(value=False)
         self.refazer = tk.BooleanVar(value=False)
         self.mesmo_status = tk.BooleanVar(value=False)
         opcoes = tk.Frame(sec, bg=COR_FUNDO)
