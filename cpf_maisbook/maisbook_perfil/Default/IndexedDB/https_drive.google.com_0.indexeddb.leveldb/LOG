@@ -1,8 +1,12 @@
-2026/10/15-18:09:08.057 b09c Reusing MANIFEST C:\Users\REIS\Documents\PAPA 2\vazio\cpf_maisbook\maisbook_perfil\Default\IndexedDB\https_drive.google.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/10/15-18:09:08.058 b09c Recovering log #98
-2026/10/15-18:09:08.062 b09c Reusing old log C:\Users\REIS\Documents\PAPA 2\vazio\cpf_maisbook\maisbook_perfil\Default\IndexedDB\https_drive.google.com_0.indexeddb.leveldb/000098.log 
-2026/10/15-18:09:08.062 b09c Delete type=2 #96
-2026/10/15-18:09:08.062 b09c Delete type=2 #99
-2026/10/15-18:09:48.388 b09c Level-0 table #103: started
-2026/10/15-18:09:48.467 b09c Level-0 table #103: 4028993 bytes OK
-2026/10/15-18:09:48.467 b09c Delete type=0 #98
+2026/11/03-10:20:01.695 4630 Reusing MANIFEST C:\Users\REIS\Documents\GitHub\DADA\UTILITIES-\cpf_maisbook\maisbook_perfil\Default\IndexedDB\https_drive.google.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/11/03-10:20:01.696 4630 Recovering log #102
+2026/11/03-10:20:01.703 4630 Reusing old log C:\Users\REIS\Documents\GitHub\DADA\UTILITIES-\cpf_maisbook\maisbook_perfil\Default\IndexedDB\https_drive.google.com_0.indexeddb.leveldb/000102.log 
+2026/11/03-10:20:23.064 35f4 Compacting 1@1 + 1@2 files
+2026/11/03-10:20:23.069 35f4 Generated table #105@1: 92 keys, 92399 bytes
+2026/11/03-10:20:23.069 35f4 Compacted 1@1 + 1@2 files => 92399 bytes
+2026/11/03-10:20:23.070 35f4 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/11/03-10:20:23.070 35f4 Delete type=2 #100
+2026/11/03-10:20:23.070 35f4 Delete type=2 #103
+2026/11/03-10:21:33.818 35f4 Level-0 table #107: started
+2026/11/03-10:21:33.907 35f4 Level-0 table #107: 4107392 bytes OK
+2026/11/03-10:21:33.908 35f4 Delete type=0 #102

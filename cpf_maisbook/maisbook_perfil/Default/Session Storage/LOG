@@ -1,2 +1,3 @@
-2026/10/19-15:22:10.325 1250 Creating DB C:\Users\REIS\Documents\PAPA 2\vazio\cpf_maisbook\maisbook_perfil\Default\Session Storage since it was missing.
-2026/10/19-15:22:10.338 1250 Reusing MANIFEST C:\Users\REIS\Documents\PAPA 2\vazio\cpf_maisbook\maisbook_perfil\Default\Session Storage/MANIFEST-000001
+2026/11/03-10:19:54.687 26e8 Reusing MANIFEST C:\Users\REIS\Documents\GitHub\DADA\UTILITIES-\cpf_maisbook\maisbook_perfil\Default\Session Storage/MANIFEST-000001
+2026/11/03-10:19:54.688 26e8 Recovering log #3
+2026/11/03-10:19:54.689 26e8 Reusing old log C:\Users\REIS\Documents\GitHub\DADA\UTILITIES-\cpf_maisbook\maisbook_perfil\Default\Session Storage/000003.log 
