@@ -936,6 +936,8 @@ def achar_cliente(pagina, pessoa):
         )
 
     cliente_id = certos[0]["id"]
+    if certos[0].get("sge"):
+        pessoa["sge_maisbook"] = certos[0]["sge"].strip()
     linha = pagina.locator(f'.clientes-grid-row[data-cliente-id="{cliente_id}"]')
     linha.first.wait_for(state="visible", timeout=15000)
     return cliente_id, linha.first
@@ -1418,16 +1420,36 @@ def subir_para_o_drive(contexto, pagina_mb, pessoa, achados):
 
 
 def abrir_edicao(pagina, pessoa):
-    cliente_id, _ = achar_cliente(pagina, pessoa)
-    pagina.locator(f'button[title="Editar"][data-cliente-id="{cliente_id}"]').click()
+    cliente_id, linha = achar_cliente(pagina, pessoa)
+    botao_editar = pagina.locator(
+        f'button[title="Editar"][data-cliente-id="{cliente_id}"], '
+        f'[title*="Editar" i][data-cliente-id="{cliente_id}"]'
+    )
+    if not botao_editar.count():
+        botao_editar = linha.locator('button[title*="Editar" i], [title*="Editar" i]')
+    botao_editar.first.scroll_into_view_if_needed()
+    botao_editar.first.click(timeout=15000)
     modal = pagina.locator("#modal-cliente")
     modal.wait_for(state="visible", timeout=15000)
     campo_sge = pagina.locator("#cliente_codigo_interno")
+    campo_nome = pagina.locator("#cliente_nome")
     limite = time.time() + 15
-    while time.time() < limite and campo_sge.input_value().strip() != pessoa["sge"]:
+    confirmado = False
+    while time.time() < limite:
+        sge_modal = (campo_sge.input_value() or "").strip()
+        nome_modal = (campo_nome.input_value() or "").strip() if campo_nome.count() else ""
+        if (
+            sge_modal == pessoa["sge"]
+            or (pessoa.get("sge_maisbook") and sge_modal == pessoa["sge_maisbook"])
+            or (nome_modal and nomes_batem(pessoa["nome"], nome_modal))
+        ):
+            if sge_modal and sge_modal != pessoa["sge"]:
+                pessoa["sge_maisbook"] = sge_modal
+            confirmado = True
+            break
         time.sleep(0.3)
-    if campo_sge.input_value().strip() != pessoa["sge"]:
-        modal.get_by_role("button", name="Cancelar", exact=True).first.click()
+    if not confirmado:
+        fechar_edicao(pagina)
         raise PararPessoa("erro no e-mail", "o Editar abriu outro cliente — link não colado")
     return modal
 
@@ -1448,7 +1470,7 @@ def campo_album_pronto(pagina):
 
 
 def edicao_aberta(pagina):
-    modal = pagina.locator("#modal-cliente.active")
+    modal = pagina.locator("#modal-cliente.active, #modal-cliente:visible")
     try:
         return modal.count() > 0 and modal.first.is_visible()
     except Exception:
@@ -1458,8 +1480,25 @@ def edicao_aberta(pagina):
 def fechar_edicao(pagina):
     if not edicao_aberta(pagina):
         return
-    pagina.locator("#modal-cliente").get_by_role("button", name="Cancelar", exact=True).first.click()
-    pagina.locator("#modal-cliente.active").wait_for(state="hidden", timeout=10000)
+    try:
+        btn_cancelar = pagina.locator("#modal-cliente").get_by_role("button", name="Cancelar", exact=True)
+        if btn_cancelar.count() and btn_cancelar.first.is_visible():
+            btn_cancelar.first.click(timeout=5000)
+        else:
+            btn_fechar = pagina.locator("#modal-cliente button.modal-close, #modal-cliente .close")
+            if btn_fechar.count() and btn_fechar.first.is_visible():
+                btn_fechar.first.click(timeout=5000)
+            else:
+                pagina.keyboard.press("Escape")
+    except Exception:
+        try:
+            pagina.keyboard.press("Escape")
+        except Exception:
+            pass
+    try:
+        pagina.locator("#modal-cliente.active").wait_for(state="hidden", timeout=8000)
+    except Exception:
+        pass
 
 
 def esperar_salvar(pagina):
@@ -1476,6 +1515,7 @@ def esperar_salvar(pagina):
             fechar_edicao(pagina)
             return
         time.sleep(0.4)
+    fechar_edicao(pagina)
     raise PararPessoa("erro no e-mail", "o MaisBook não terminou de salvar o Álbum pronto")
 
 
@@ -1486,9 +1526,11 @@ def colar_link_album(pagina, pessoa, link):
     if link_da_pasta(campo.input_value()) != link:
         fechar_edicao(pagina)
         raise PararPessoa("erro no e-mail", "não consegui colar o link em Álbum pronto")
-    modal.get_by_role("button", name="Salvar", exact=True).click()
+    modal.get_by_role("button", name="Salvar", exact=True).first.click(timeout=15000)
     esperar_salvar(pagina)
+    pagina.wait_for_timeout(1200)
 
+    ir_clientes(pagina, termo_busca(pessoa))
     abrir_edicao(pagina, pessoa)
     gravado = pagina.locator("#cliente_album_link").input_value()
     fechar_edicao(pagina)
@@ -1499,13 +1541,27 @@ def colar_link_album(pagina, pessoa, link):
 
 
 def enviar_email(pagina, pessoa):
-    cliente_id, _ = achar_cliente(pagina, pessoa)
-    pagina.locator(f'button[title="Enviar e-mail"][data-cliente-id="{cliente_id}"]').click()
+    fechar_edicao(pagina)
+    cliente_id, linha = achar_cliente(pagina, pessoa)
+    btn_email = pagina.locator(
+        f'button[title="Enviar e-mail"][data-cliente-id="{cliente_id}"], '
+        f'button[title*="e-mail" i][data-cliente-id="{cliente_id}"], '
+        f'button[title*="notifica" i][data-cliente-id="{cliente_id}"]'
+    )
+    if not btn_email.count():
+        btn_email = linha.locator('button[title*="e-mail" i], button[title*="notifica" i]')
+    if not btn_email.count():
+        raise PararPessoa("erro no e-mail", "não achei o botão Enviar e-mail neste cliente")
+    btn_email.first.scroll_into_view_if_needed()
+    btn_email.first.click(timeout=15000)
     modal = pagina.locator("#modal-notificacao-cliente")
     modal.wait_for(state="visible", timeout=15000)
     info = modal.locator("#notificacao_cliente_info").inner_text()
     if pessoa["nome"] and not nomes_batem(pessoa["nome"], info):
-        modal.locator("button.modal-close").first.click()
+        try:
+            modal.locator("button.modal-close").first.click(timeout=5000)
+        except Exception:
+            pagina.keyboard.press("Escape")
         raise PararPessoa("erro no e-mail", "o pop-up abriu outro cliente — e-mail não enviado")
 
     pagina.locator("#notificacao_template").evaluate(
@@ -1519,10 +1575,13 @@ def enviar_email(pagina, pessoa):
     valor = pagina.locator("#notificacao_template").input_value()
     assunto = pagina.locator("#notificacao_assunto").input_value().strip()
     if valor != TEMPLATE_VALOR or not assunto:
-        modal.locator("button.modal-close").first.click()
+        try:
+            modal.locator("button.modal-close").first.click(timeout=5000)
+        except Exception:
+            pagina.keyboard.press("Escape")
         raise PararPessoa("erro no e-mail", "não consegui selecionar o template Aprovação de álbum")
 
-    pagina.locator("#btn-enviar-notificacao").click()
+    pagina.locator("#btn-enviar-notificacao").click(timeout=15000)
     resultado = pagina.locator("#notificacao_result")
     resultado.wait_for(state="visible", timeout=45000)
     info_resultado = resultado.evaluate(
@@ -1530,6 +1589,12 @@ def enviar_email(pagina, pessoa):
     )
     texto = normalizar(info_resultado.get("texto"))
     verde = "209, 250, 229" in info_resultado.get("fundo", "")
+    try:
+        fechar_notif = modal.locator("button.modal-close")
+        if fechar_notif.count() and fechar_notif.first.is_visible():
+            fechar_notif.first.click(timeout=3000)
+    except Exception:
+        pass
     if "erro" in texto and "sucesso" not in texto:
         raise PararPessoa("erro no e-mail", info_resultado.get("texto") or "o MaisBook recusou o envio")
     if "sucesso" in texto or "enviado" in texto or verde:
@@ -1824,47 +1889,89 @@ def dar_baixa_sge_enviado(playwright, pessoa, estado_sge):
     para o formando assim que o álbum é enviado no MaisBook.
     """
     try:
+        arq_baixa = PASTA.parent / "baixa_sge" / "BAIXA.PY"
+        sge_mod = (
+            base
+            if hasattr(base, "processar_com_contas")
+            else SourceFileLoader("baixa_sge_mod", str(arq_baixa)).load_module()
+        )
+
         if estado_sge.get("robo") is None:
-            sge_cfg = base.carregar_config()
-            sge_cfg["etapa"] = "Enviado para Aprovação"
-            sge_contexto, sge_pagina = base.abrir_navegador(playwright)
-            robo_sge = base.Robo(sge_contexto, sge_pagina, sge_cfg, True, False)
+            sge_cfg = sge_mod.carregar_config()
+            sge_cfg["aba"] = "GERAL ENVIOS"
+            sge_contexto, sge_pagina = sge_mod.abrir_navegador(playwright)
+            robo_sge = sge_mod.Robo(sge_contexto, sge_pagina, sge_cfg, True, False)
             sge_pagina.on("dialog", robo_sge._dialogo)
-            contas_sge = base.ContasSGE()
-            base.ir(sge_pagina, sge_cfg["url_clientes"], robo_sge.timeout)
-            base.garantir_login(robo_sge, contas_sge, PARAR)
+            contas_sge = sge_mod.ContasSGE()
+            robo_sge.contas = contas_sge
+            sge_mod.ir(sge_pagina, sge_cfg["url_clientes"], robo_sge.timeout)
+            sge_mod.entrar_sge(robo_sge, contas_sge, PARAR)
             estado_sge["robo"] = robo_sge
             estado_sge["contas"] = contas_sge
             estado_sge["contexto"] = sge_contexto
             estado_sge["cfg"] = sge_cfg
+            estado_sge["mod"] = sge_mod
 
         robo_sge = estado_sge["robo"]
         contas_sge = estado_sge["contas"]
         sge_cfg = estado_sge["cfg"]
-        sge_cfg["etapa"] = "Enviado para Aprovação"
+        sge_mod = estado_sge.get("mod") or sge_mod
+        robo_sge.contas = contas_sge
 
-        aluno_sge = {
-            "sge": pessoa["sge"],
-            "nome_planilha": pessoa["nome"],
-            "status_coluna_k": "Aguardando Aprovação",
-            "etapa_sge": "Enviado para Aprovação",
-        }
-        status_sge, nome_sge, det_sge, _ = base.processar_com_contas(robo_sge, contas_sge, aluno_sge)
-        if status_sge in ("CONCLUIDO", "JA ESTAVA"):
-            feitos_sge = base.carregar_feitos()
-            feitos_sge[pessoa["sge"]] = {
-                "nome": nome_sge or pessoa["nome"],
-                "etapa": "Enviado para Aprovação",
-                "status_coluna_k": "Aguardando Aprovação",
-                "data": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
-                "status": status_sge,
+        planos_lista = pessoa.get("planos") or []
+        item_aluno = planos_lista[0] if planos_lista else ", ".join(pessoa.get("tamanhos") or [])
+
+        codigos_tentar = [str(pessoa.get("sge") or "").strip()]
+        sge_mb = str(pessoa.get("sge_maisbook") or "").strip()
+        if sge_mb and sge_mb not in codigos_tentar:
+            codigos_tentar.append(sge_mb)
+
+        linhas_csv_sge = []
+        resultados_sge = []
+        aluno_sge = None
+
+        for cod_sge in codigos_tentar:
+            if not cod_sge:
+                continue
+            aluno_sge = {
+                "linha": int(pessoa.get("linha") or 0),
+                "sge": sge_mod.codigo_base(cod_sge, sge_cfg),
+                "nome": pessoa.get("nome") or "",
+                "status": "Aguardando Aprovação",
+                "item": item_aluno,
+                "cpf": pessoa.get("cpf") or "",
+                "maisbook": pessoa.get("codigo") or "",
             }
-            base.salvar_feitos(feitos_sge)
-        resumo_sge = f"SGE: {status_sge} (Enviado para Aprovação)" + (f" — {det_sge}" if det_sge else "")
+            linhas_csv_sge = []
+            resultados_sge = sge_mod.processar_com_contas(robo_sge, aluno_sge, linhas_csv_sge)
+            if resultados_sge and not all(r == "NAO ENCONTRADO" for r in resultados_sge):
+                break
+
+        status_sge = resultados_sge[0] if resultados_sge else "SEM RETORNO"
+        det_sge = linhas_csv_sge[0][7] if linhas_csv_sge and len(linhas_csv_sge[0]) > 7 else ""
+
+        if any(r in ("ALTERADO", "REENVIADO", "JA NO STATUS") for r in resultados_sge) and aluno_sge:
+            feitas_sge = sge_mod.carregar_feitas()
+            chave_feita = (
+                f"{aluno_sge['sge']}|"
+                f"{sge_mod.normalizar(sge_mod.status_desejado(sge_cfg, aluno_sge['status']))}|"
+                f"{sge_mod.normalizar(aluno_sge['item'])}"
+            )
+            feitas_sge[chave_feita] = {
+                "nome": pessoa["nome"],
+                "status": "Enviado para Aprovação",
+                "cpf": pessoa.get("cpf", ""),
+                "data": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
+            }
+            sge_mod.salvar_feitas(feitas_sge)
+
+        resumo_sge = f"SGE ({aluno_sge['sge'] if aluno_sge else pessoa['sge']}): {status_sge} (Enviado para Aprovação)" + (
+            f" — {det_sge}" if det_sge else ""
+        )
         print(f"    {resumo_sge}")
         return resumo_sge
     except Exception as erro:
-        aviso = f"SGE erro: {base.erro_curto(erro)}"
+        aviso = f"SGE erro: {base.erro_curto(erro) if hasattr(base, 'erro_curto') else erro}"
         print(f"    {aviso}")
         return aviso
 
