@@ -5,7 +5,7 @@
   "col_plano": "F",
   "col_nome": "C",
   "col_codigo": "E",
-  "origem": "D:\\ÁLBUNS COLAÇÃO 2025.2",
+  "origem": "D:/ÁLBUNS COLAÇÃO 2025.2",
   "destino": "C:\\Users\\REIS\\Documents\\PAPA 2\\LOTE 17",
   "plano": "",
   "tamanhos": [
@@ -24,7 +24,5 @@
   "envio_exigir_coluna_m": true,
   "envio_atualizar_planilha": true,
   "envio_baixa_sge": true,
-  "webhook_apps_script": "",
-  "gravar_via_chrome": true,
-  "autosync_ativo": true
+  "gravar_via_chrome": true
 }
