@@ -71,8 +71,8 @@ CONFIG_PADRAO = {
     "prefixo_codigo": "633.",
     "planilha": str(PASTA / "BAIXA_TESTE.xlsx"),
     # se preenchido, a planilha é baixada deste link do Google (tem prioridade sobre "planilha")
-    "planilha_link": "",
-    "aba": "ALBUNS COLAÇAO",
+    "planilha_link": "https://docs.google.com/spreadsheets/d/1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0/edit?usp=sharing",
+    "aba": "GERAL ENVIOS",
     "linha_inicial": 19,
     "col_sge": "E",
     "col_nome": "C",
@@ -80,12 +80,40 @@ CONFIG_PADRAO = {
     "col_item": "F",
     "col_cpf": "H",
     "col_maisbook": "I",
-    "itens_incluir": ["ENCADERNA", "ALBUM", "BOOK"],
+    "itens_incluir": [
+        "ENCADERNA",
+        "ALBUM",
+        "BOOK",
+        "ENCADERNACAO 20X30 GRAFICA MAIS",
+        "ENCADERNACAO 20X20 GRAFICA MAIS",
+        "ENCADERNACAO 24X34 GRAFICA MAIS",
+        "ENCADERNACAO ALBUM 20X30 GRAFICO MAIS",
+        "ENCADERNACAO ALBUM 20X20 GRAFICO MAIS",
+        "ENCADERNACAO ALBUM 24X34 GRAFICO MAIS",
+    ],
     "itens_excluir": ["DIGITAL"],
-    # o álbum vendido separado tem prioridade sobre o plano/pacote
-    "itens_prioritarios": ["ENCADERNACAO ALBUM"],
+    # o álbum vendido separado (ENCADERNAÇÃO ...) tem prioridade sobre o plano/pacote
+    "itens_prioritarios": [
+        "ENCADERNACAO",
+        "ENCADERNACAO 20X30 GRAFICA MAIS",
+        "ENCADERNACAO 20X20 GRAFICA MAIS",
+        "ENCADERNACAO 24X34 GRAFICA MAIS",
+        "ENCADERNACAO ALBUM",
+        "ENCADERNACAO ALBUM 20X30 GRAFICO MAIS",
+        "ENCADERNACAO ALBUM 20X20 GRAFICO MAIS",
+        "ENCADERNACAO ALBUM 24X34 GRAFICO MAIS",
+    ],
     # id da planilha do Google -> itens prioritários só quando essa planilha é usada
-    "prioritarios_por_planilha": {},
+    "prioritarios_por_planilha": {
+        "1FeYQop9z6rVAFQuIs1EOiuQcE84t0iBgamYtMWUIAU0": [
+            "ENCADERNAÇÃO 20X30 GRÁFICA MAIS",
+            "ENCADERNAÇÃO 20X20 GRÁFICA MAIS",
+            "ENCADERNAÇÃO 24X34 GRÁFICA MAIS",
+            "Encadernação Álbum 20x30 Gráfico MAIS",
+            "Encadernação Álbum 20x20 Gráfico MAIS",
+            "Encadernação Álbum 24x34 Gráfico MAIS",
+        ]
+    },
     "pular_pedidos_com_texto": ["CANCELADO"],
     "ignorar_itens_com_status": ["ENTREGUE", "CANCELADO"],
     # novo status -> status que já estão além dele (o item não volta)
@@ -122,9 +150,10 @@ CONFIG_PADRAO = {
     # aprendido com o usuário
     "texto_tela_cliente": ["Grade Financeira", "Mais Ações"],
     "caminho_pedidos": ["Mais Ações", "Ver Pedidos"],
-    "menu_status": "Alterar Status",
+    "menu_status": "Alterar Status do Item",
     "mapa_status": {
         "AGUARDANDO APROVACAO": "Enviado para Aprovação",
+        "DIAGRAMADO": "Enviado para Aprovação",
         "APROVADO": "Aprovado",
         "IMPRESSAO": "Em Impressão",
         "FINALIZADO": "Pronto",
@@ -385,38 +414,98 @@ def salvar_feitas(feitas):
 
 PALAVRAS_IGNORADAS = {"PLANO", "DE", "DA", "DO", "E", "-"}
 
+PALAVRAS_CERIMONIA_NAO_ALBUM = {
+    "BECA", "CANUDO", "CONVITE", "CERIMONIA", "CERIMONIAL", "COLACAO",
+    "QUADRO", "PORTA", "RETRATO", "PLACA", "SENHA", "ROSAS", "OFERTORIO",
+    "ACESSORIOS", "FAIXAS", "GRAVATAS", "ATENDIMENTO", "EXCLUSIVIDADE",
+    "ACESSO", "LETRAS", "DRONE", "PLAY",
+}
+
+
+def normalizar_palavra_item(p):
+    if p in ("GRAFICA", "GRAFICO", "GRAFICAS", "GRAFICOS"):
+        return "GRAFICO"
+    if p in ("ENCADERNACAO", "ENCADERNACOES"):
+        return "ENCADERNACAO"
+    if p in ("ALBUM", "ALBUNS"):
+        return "ALBUM"
+    return p
+
+
+def tamanhos_no_texto(texto):
+    """Extrai dimensões normalizadas (ex.: '30X20' e '20X30' viram ('20', '30'))."""
+    achados = set()
+    for a, b in re.findall(r"(\d{2})\s*X\s*(\d{2})", normalizar(texto)):
+        achados.add(tuple(sorted((a, b))))
+    return achados
+
 
 def palavras(texto, genericas=()):
     ignorar = PALAVRAS_IGNORADAS | {normalizar(g) for g in genericas}
-    return {p for p in re.split(r"[\s/()\-]+", normalizar(texto))
-            if p and p not in ignorar and not re.fullmatch(r"\d+X\d+", p)}
+    return {
+        normalizar_palavra_item(p)
+        for p in re.split(r"[\s/()\-]+", normalizar(texto))
+        if p and p not in ignorar and not re.fullmatch(r"\d+X\d+", p)
+    }
 
 
 def item_serve(nome_item, aluno, cfg):
     """
-    Compara o item da planilha com o do SGE pelas palavras que identificam o pacote,
-    sem tamanho e sem palavras genéricas:
-      'Diamond Book 24X34'      -> 'PLANO DIAMOND BOOK'
-      'Studio Day Berlim 24x34' -> 'PACOTE BERLIM'
+    Compara o item da planilha com o do SGE pelas palavras que identificam o pacote/álbum:
+      - Qualquer item de ENCADERNAÇÃO no SGE (ex.: 'ENCADERNAÇÃO 20X30 GRÁFICA MAIS') serve como álbum
+      - 'Diamond Book 24X34'      -> 'PLANO DIAMOND BOOK' ou 'ENCADERNAÇÃO 24X34 GRÁFICA MAIS'
+      - 'Studio Day Berlim 24x34' -> 'PACOTE BERLIM' ou 'ENCADERNAÇÃO 24X34 GRÁFICA MAIS'
+      - 'Prime Book 30X20'        -> 'PLANO PRIME BOOK' ou 'ENCADERNAÇÃO 20X30 GRÁFICA MAIS'
     """
 
     nome = normalizar(nome_item)
-    excluido = any(normalizar(p) in nome for p in cfg.get("itens_excluir", []))
-    if aluno["item"]:
+    excluido = any(normalizar(p) in nome for p in cfg.get("itens_excluir", []) if p)
+    if excluido and not (aluno.get("item") and any(normalizar(p) in normalizar(aluno["item"]) for p in cfg.get("itens_excluir", []) if p)):
+        return False
+
+    # Qualquer item de ENCADERNAÇÃO (ex.: ENCADERNAÇÃO 20X30 GRÁFICA MAIS) é um álbum e sempre serve
+    if "ENCADERNA" in nome:
+        return True
+
+    if aluno.get("item"):
         desejado = normalizar(aluno["item"])
         apelido = cfg.get("apelidos_itens", {}).get(desejado)
-        if apelido:
-            return normalizar(apelido) == nome
-        if excluido and not any(normalizar(p) in desejado for p in cfg.get("itens_excluir", [])):
-            return False
+        if apelido and normalizar(apelido) == nome:
+            return True
         if desejado in nome:
             return True
         genericas = cfg.get("palavras_genericas", [])
         do_sge, da_planilha = palavras(nome_item, genericas), palavras(aluno["item"], genericas)
-        return bool(do_sge and da_planilha) and (da_planilha <= do_sge or do_sge <= da_planilha)
-    if excluido:
+        if do_sge and da_planilha and (da_planilha <= do_sge or do_sge <= da_planilha):
+            return True
+        # Se a coluna de item na planilha tiver só o tamanho (ex.: "20X30" ou "30X20")
+        tam_plan = tamanhos_no_texto(aluno["item"])
+        tam_sge = tamanhos_no_texto(nome_item)
+        if tam_plan and tam_sge and (tam_plan & tam_sge):
+            if any(normalizar(p) in nome for p in cfg.get("itens_incluir", []) if p):
+                return True
         return False
-    return any(normalizar(p) in nome for p in cfg.get("itens_incluir", []))
+
+    return any(normalizar(p) in nome for p in cfg.get("itens_incluir", []) if p)
+
+
+def item_album_ou_pacote_fallback(nome_item, cfg):
+    """
+    Fallback seguro quando a planilha indica um plano (ex.: 'Prime Book 30X20'),
+    mas no SGE o formando está com outro pacote/book de álbum (ex.: 'PACOTE MOSCOU', 'PLANO ESSENCIAL BOOK').
+    Nunca seleciona itens de cerimônia (Beca, Canudo, Convite, Foto, Senha, etc.) nem itens digitais.
+    """
+    nome = normalizar(nome_item)
+    if any(normalizar(p) in nome for p in cfg.get("itens_excluir", []) if p):
+        return False
+    tokens = set(re.split(r"[\s/()\-]+", nome))
+    if tokens & PALAVRAS_CERIMONIA_NAO_ALBUM:
+        return False
+    if any(normalizar(p) in nome for p in cfg.get("itens_incluir", []) if p):
+        return True
+    if ("PACOTE" in tokens or "PLANO" in tokens) and any(k in tokens for k in ("MOSCOU", "BERLIM", "PRIME", "DIAMOND", "ESSENCIAL", "BOOK")):
+        return True
+    return False
 
 
 def id_planilha(link):
@@ -425,24 +514,41 @@ def id_planilha(link):
 
 
 def lista_prioritarios(cfg):
-    """Prioritários gerais + os da planilha do link em uso (itens que não aparecem nas colunas dela)."""
+    """Prioritários gerais + todos os configurados por planilha (mesmo quando usa cópia local .xlsx)."""
 
     lista = list(cfg.get("itens_prioritarios", []))
-    da_planilha = cfg.get("prioritarios_por_planilha", {}).get(id_planilha(cfg.get("planilha_link")), [])
-    return lista + [p for p in da_planilha if p not in lista]
+    por_plan = cfg.get("prioritarios_por_planilha", {}) or {}
+    id_atual = id_planilha(cfg.get("planilha_link"))
+    listas_plan = list(por_plan.get(id_atual, []))
+    for _, itens_p in por_plan.items():
+        for p in itens_p or []:
+            if p not in listas_plan:
+                listas_plan.append(p)
+    return lista + [p for p in listas_plan if p not in lista]
 
 
 def eh_prioritario(nome_item, cfg):
     nome = normalizar(nome_item)
     if any(normalizar(p) in nome for p in cfg.get("itens_excluir", []) if p):
         return False
+    # Qualquer item de ENCADERNAÇÃO no SGE (ex.: 'ENCADERNAÇÃO 20X30 GRÁFICA MAIS',
+    # 'ENCADERNAÇÃO ÁLBUM 20X20 GRÁFICO MAIS', 'ENCADERNAÇÃO 24X34 GRÁFICA MAIS')
+    # é o álbum separado e SEMPRE tem prioridade máxima para baixa
+    if "ENCADERNA" in nome:
+        return True
     genericas = cfg.get("palavras_genericas", [])
     do_sge = palavras(nome_item, genericas)
+    do_sge_sem_album = do_sge - {"ALBUM"}
     for prioritario in lista_prioritarios(cfg):
         if not prioritario:
             continue
         chave = palavras(prioritario, genericas)
-        if normalizar(prioritario) in nome or (chave and chave <= do_sge):
+        chave_sem_album = chave - {"ALBUM"}
+        if (
+            normalizar(prioritario) in nome
+            or (chave and chave <= do_sge)
+            or (chave_sem_album and len(chave_sem_album) >= 2 and chave_sem_album <= do_sge_sem_album)
+        ):
             return True
     return False
 
@@ -1224,10 +1330,18 @@ def modal_aberto(pagina, timeout_ms):
 
 
 def mesmo_item(nome_tabela, texto_janela):
-    """'PLANO ESSENCIAL BOOK 1' (com número de nota) casa com o título da janela."""
+    """'PLANO ESSENCIAL BOOK 1' (com número de nota) ou 'ENCADERNAÇÃO 20X30 GRÁFICA MAIS' casa com o título da janela."""
 
     nome = {p for p in palavras(nome_tabela) if not p.isdigit()}
-    return bool(nome) and nome <= palavras(texto_janela)
+    janela = palavras(texto_janela)
+    if not nome:
+        return True
+    if nome <= janela:
+        return True
+    intersecao = nome & janela
+    if "ENCADERNACAO" in intersecao or len(intersecao) >= max(1, len(nome) - 1):
+        return True
+    return normalizar(nome_tabela)[:12] in normalizar(texto_janela)
 
 
 def fechar_modal(modal):
@@ -1247,10 +1361,11 @@ def fechar_modal(modal):
 def achar_opcao_menu(robo, frame, linha):
     """Opção do menu de Ações que abre a alteração de status do ITEM."""
 
-    desejado = normalizar(robo.cfg.get("menu_status") or "Alterar Status")
+    desejado = normalizar(robo.cfg.get("menu_status") or "Alterar Status do Item")
+    alvos_conhecidos = {desejado, "ALTERAR STATUS DO ITEM", "ALTERAR STATUS"}
     parecidas = []
     for escopo in (linha, frame):
-        itens = escopo.locator(".dropdown-menu a, .dropdown-menu li, .dropdown-menu button, [role=menuitem], a, button")
+        itens = escopo.locator(".dropdown-menu a, .dropdown-menu button, [role=menuitem], a, button")
         for i in range(min(itens.count(), 80)):
             candidato = itens.nth(i)
             try:
@@ -1259,11 +1374,11 @@ def achar_opcao_menu(robo, frame, linha):
                 texto = normalizar(candidato.inner_text())
             except Exception:
                 continue
-            if texto == desejado:
+            if texto in alvos_conhecidos:
                 return candidato
             if "STATUS" in texto and "PEDIDO" not in texto:
                 parecidas.append(candidato)
-        if len(parecidas) == 1:
+        if parecidas:
             return parecidas[0]
 
     opcoes = [o for o in clicaveis(robo.pagina) if "PEDIDO" not in normalizar(o[2])]
@@ -1433,7 +1548,9 @@ def alterar_item(robo, frame, item, aluno):
     pagina = robo.pagina
     linha = frame.locator(f'[data-robo-item="{item["linha"]}"]')
 
-    acoes = linha.locator("td").last.locator("a, button")
+    acoes = linha.locator("td").last.locator("a, button, [role=button], .dropdown-toggle")
+    if acoes.count() == 0:
+        acoes = linha.locator("a:has-text('Ações'), button:has-text('Ações'), .dropdown-toggle, td a, td button")
     if acoes.count() == 0:
         raise AlunoPulado("ERRO", "Não achei o botão de Ações do item")
 
@@ -1511,7 +1628,9 @@ def alterar_item(robo, frame, item, aluno):
             continue
         _, itens = ler_itens(pagina)
         for atual in itens or []:
-            if atual["item"] == item["item"] and atual["cod"] == item["cod"] and mesmo_status(atual["status"], escolhida):
+            mesmo_nome = normalizar(atual["item"]) == normalizar(item["item"])
+            mesmo_cod = (not item.get("cod") or not atual.get("cod") or atual["cod"] == item["cod"])
+            if mesmo_nome and mesmo_cod and mesmo_status(atual["status"], escolhida):
                 if reenvio:
                     robo.reenviados.add((item["cod"], item["item"]))
                     return "REENVIADO", f"{atual['status']}{extras}"
@@ -1568,7 +1687,7 @@ def processar_aluno(robo, aluno, registrar, repetir=True):
                 ir_para_pedidos(robo, aluno)
         abrir_pedido(robo, numero)
 
-    # 1) lê os pedidos: álbum separado tem prioridade; senão, o plano/pacote da planilha
+    # 1) lê os pedidos: álbum separado (ENCADERNAÇÃO ...) tem prioridade máxima; senão, o plano/pacote da planilha
     alvo_status = status_desejado(robo.cfg, aluno["status"])
     def concluido(i):
         if ja_adiante(i["status"], alvo_status, robo.cfg):
@@ -1577,7 +1696,7 @@ def processar_aluno(robo, aluno, registrar, repetir=True):
             return (i["cod"], i["item"]) in robo.reenviados
         return mesmo_status(i["status"], alvo_status)
 
-    escolhido = plano = aberto = None
+    escolhido = plano = fallback_pacote = aberto = None
     vistos, nomes = [], []
     for posicao, pedido in enumerate(ativos):
         numero = pedido["numero"]
@@ -1595,10 +1714,14 @@ def processar_aluno(robo, aluno, registrar, repetir=True):
             albuns = [i for i in livres if eh_prioritario(i["item"], robo.cfg)]
             if albuns:
                 escolhido = (numero, albuns)
-                break
+                if any(not concluido(i) for i in albuns):
+                    break
             planos = [i for i in livres if item_serve(i["item"], aluno, robo.cfg)]
-            if planos and plano is None:
+            if planos and (plano is None or any(not concluido(i) for i in planos)):
                 plano = (numero, planos)
+            outros_albuns = [i for i in livres if item_album_ou_pacote_fallback(i["item"], robo.cfg)]
+            if outros_albuns and (fallback_pacote is None or any(not concluido(i) for i in outros_albuns)):
+                fallback_pacote = (numero, outros_albuns)
         except AlunoPulado as pulo:
             aberto = None
             registrar(numero, "", pulo.resultado, pulo.detalhe, tirar_print(robo.pagina, f"erro_{numero}"))
@@ -1606,7 +1729,7 @@ def processar_aluno(robo, aluno, registrar, repetir=True):
             aberto = None
             registrar(numero, "", "ERRO", erro_curto(erro), tirar_print(robo.pagina, f"erro_{numero}"))
 
-    escolhido = escolhido or plano
+    escolhido = escolhido or plano or fallback_pacote
     if not escolhido:
         if not ativos:
             return
@@ -1618,6 +1741,7 @@ def processar_aluno(robo, aluno, registrar, repetir=True):
 
     # 2) altera só os itens escolhidos, num pedido só
     numero, alvos = escolhido
+    print(f"    Pedido {numero}: selecionado(s) -> " + ", ".join(f"{i['item']} ({i['status']})" for i in alvos))
 
     def registrar_concluido(item):
         if (item["cod"], item["item"]) in robo.reenviados:
@@ -1642,7 +1766,14 @@ def processar_aluno(robo, aluno, registrar, repetir=True):
             continue
         try:
             frame, atuais = ler_itens(robo.pagina)
-            alvo = next((a for a in atuais or [] if a["item"] == item["item"] and a["cod"] == item["cod"]), item)
+            alvo = next(
+                (
+                    a for a in atuais or []
+                    if normalizar(a["item"]) == normalizar(item["item"])
+                    and (not item.get("cod") or not a.get("cod") or a["cod"] == item["cod"])
+                ),
+                item,
+            )
             resultado, detalhe = alterar_item(robo, frame, alvo, aluno)
             registrar(numero, item["item"], resultado, detalhe)
         except AlunoPulado as pulo:
