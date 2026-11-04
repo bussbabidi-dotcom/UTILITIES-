@@ -348,7 +348,8 @@ def _ler_diagramados_de_csv_local(etapa_filtro="diagramado", silencioso=False):
             capa_plan = (ov_celulas.get("M") if "M" in ov_celulas else (linha[12] if len(linha) > 12 else "")).strip()
             if not nome or not re.fullmatch(r"\d+", sge):
                 continue
-            pessoa = pessoas.setdefault(sge, {
+            chave_pessoa = f"{sge}|{normalizar(nome)}"
+            pessoa = pessoas.setdefault(chave_pessoa, {
                 "nome": nome,
                 "sge": sge,
                 "contrato": cont,
@@ -433,7 +434,8 @@ def ler_diagramados(etapa_filtro="diagramado", silencioso=False):
         capa_plan = celula(linha, colunas.get("capa") or COLUNA_CAPA_PADRAO).strip()
         if not nome or not re.fullmatch(r"\d+", sge):
             continue
-        pessoa = pessoas.setdefault(sge, {
+        chave_pessoa = f"{sge}|{normalizar(nome)}"
+        pessoa = pessoas.setdefault(chave_pessoa, {
             "nome": nome,
             "sge": sge,
             "contrato": so_contrato(celula(linha, colunas["contrato"])),
@@ -768,18 +770,44 @@ def imprimir_diagnostico_elegibilidade(diag):
 IGNORAR_NO_NOME = {"da", "de", "do", "dos", "das", "e", "di", "du"}
 
 
+PALAVRAS_ESTRUTURA_SERVIDOR = {
+    "capa", "capas", "album", "albuns", "lamina", "laminas", "jpeg", "jpg", "png",
+    "ctt", "contrato", "remessa", "prontos", "colacao", "envio", "lote",
+    "30x20", "20x20", "24x34", "berlim", "diamond", "essencial", "classic", "premium",
+}
+
+
 def capa_e_da_pessoa(nome, arquivo, sge=""):
-    """Confere se o caminho do arquivo/pasta pertence à pessoa (pelo nome completo, 2 primeiras palavras ou código SGE)."""
+    """Confere se o caminho do arquivo/pasta pertence exclusivamente à pessoa (sem confundir homônimos como 'Ana Paula')."""
     texto_norm = normalizar(str(arquivo))
     palavras_texto = set(texto_norm.split())
-    if sge and str(sge).strip() and str(sge).strip() in palavras_texto:
+    sge_limpo = str(sge or "").strip()
+    if sge_limpo and len(sge_limpo) >= 3 and sge_limpo in palavras_texto:
         return True
     if proc.capa_da_pessoa(nome, [str(arquivo)]):
         return True
     palavras = [p for p in normalizar(nome).split() if len(p) > 2 and p not in IGNORAR_NO_NOME]
     if not palavras:
         return False
-    return all(palavra in palavras_texto for palavra in palavras[:2])
+    # Só aceita abreviação (2+ palavras iniciais) se o nome do arquivo/pasta não tiver sobrenomes conflitantes de outra pessoa
+    if len(palavras) >= 2 and all(palavra in palavras_texto for palavra in palavras[:2]):
+        try:
+            p_arq = Path(str(arquivo))
+            partes_cand = [p_arq.stem]
+            if p_arq.parent and p_arq.parent.name:
+                partes_cand.append(p_arq.parent.name)
+            palavras_cand = [
+                w for w in normalizar(" ".join(partes_cand)).split()
+                if len(w) > 2
+                and not w.isdigit()
+                and w not in IGNORAR_NO_NOME
+                and w not in PALAVRAS_ESTRUTURA_SERVIDOR
+            ]
+            if palavras_cand and all(w in set(palavras) for w in palavras_cand):
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def procurar_capa_da_pessoa(albuns, nome, tamanho, sge=""):
@@ -1038,8 +1066,11 @@ def conferir_pessoa_no_servidor(pessoa, albuns, indice):
 
     if not itens:
         return {
+            "id": str(pessoa.get("id") or ""),
+            "linha": pessoa.get("linha") or 0,
             "sge": str(pessoa.get("sge") or ""),
             "nome": pessoa.get("nome") or "",
+            "contrato": str(pessoa.get("contrato") or ""),
             "temAlbum": False,
             "temPastaAlbum": False,
             "temCapa": False,
@@ -1049,6 +1080,7 @@ def conferir_pessoa_no_servidor(pessoa, albuns, indice):
             "resumoGeral": f"⚠ {msg or 'Plano não identificado'}",
             "mensagem": msg or "Plano não identificado",
             "pastaAlbum": "",
+            "nomePastaAluno": "",
             "arquivoCapa": "",
             "itens": [],
         }
@@ -1057,6 +1089,20 @@ def conferir_pessoa_no_servidor(pessoa, albuns, indice):
     tem_pasta = any(i["temPastaAlbum"] for i in itens)
     tem_capa = all(i["temCapa"] for i in itens)
     completo = bool(tem_album and tem_capa)
+
+    primeira_pasta = next((i["pastaAlbum"] for i in itens if i.get("pastaAlbum")), "")
+    primeira_capa = next((i["arquivoCapa"] for i in itens if i.get("arquivoCapa")), "")
+
+    nome_pasta_aluno = ""
+    if primeira_pasta:
+        try:
+            p_obj = Path(primeira_pasta)
+            if p_obj.name.upper().startswith(("ÁLBUM", "ALBUM", "JPEG", "JPG", "LAMINAS", "LÂMINAS")) and p_obj.parent.name:
+                nome_pasta_aluno = p_obj.parent.name
+            else:
+                nome_pasta_aluno = p_obj.name
+        except Exception:
+            nome_pasta_aluno = ""
 
     partes_alb = []
     for i in itens:
@@ -1067,16 +1113,17 @@ def conferir_pessoa_no_servidor(pessoa, albuns, indice):
         else:
             partes_alb.append(f"{i['tamanho']}: NÃO")
 
+    sufixo_pasta = f" · Pasta: {nome_pasta_aluno}" if nome_pasta_aluno else ""
     if tem_album:
-        resumo_album = "✔ SIM (" + ", ".join(partes_alb) + ")"
+        resumo_album = "✔ SIM (" + ", ".join(partes_alb) + sufixo_pasta + ")"
     elif tem_pasta:
-        resumo_album = "⚠ " + ", ".join(partes_alb)
+        resumo_album = "⚠ " + ", ".join(partes_alb) + sufixo_pasta
     else:
         resumo_album = "✖ SEM ÁLBUM (" + ", ".join(partes_alb) + ")"
 
     if tem_capa:
         nomes_capas = [Path(i["arquivoCapa"]).name for i in itens if i.get("arquivoCapa")]
-        det_c = nomes_capas[0] if len(nomes_capas) == 1 else f"{len(nomes_capas)} capas"
+        det_c = nomes_capas[0] if len(nomes_capas) == 1 else f"{len(nomes_capas)} capas ({', '.join(nomes_capas)})"
         resumo_capa = f"✔ SIM ({det_c})"
     elif any(i["temCapa"] for i in itens):
         partes_c = [f"{i['tamanho']}: {'SIM' if i['temCapa'] else 'NÃO'}" for i in itens]
@@ -1099,12 +1146,12 @@ def conferir_pessoa_no_servidor(pessoa, albuns, indice):
         else:
             resumo_geral = "✖ SEM ÁLBUM E SEM CAPA NO SERVIDOR"
 
-    primeira_pasta = next((i["pastaAlbum"] for i in itens if i.get("pastaAlbum")), "")
-    primeira_capa = next((i["arquivoCapa"] for i in itens if i.get("arquivoCapa")), "")
-
     return {
+        "id": str(pessoa.get("id") or ""),
+        "linha": pessoa.get("linha") or 0,
         "sge": str(pessoa.get("sge") or ""),
         "nome": pessoa.get("nome") or "",
+        "contrato": str(pessoa.get("contrato") or ""),
         "temAlbum": tem_album,
         "temPastaAlbum": tem_pasta,
         "temCapa": tem_capa,
@@ -1114,6 +1161,7 @@ def conferir_pessoa_no_servidor(pessoa, albuns, indice):
         "resumoGeral": resumo_geral,
         "mensagem": msg,
         "pastaAlbum": primeira_pasta,
+        "nomePastaAluno": nome_pasta_aluno,
         "arquivoCapa": primeira_capa,
         "itens": itens,
     }
@@ -2720,21 +2768,35 @@ def main():
         albuns, indice = preparar_indice(origem_srv)
         alunos_in = payload.get("alunos") or []
         saida = {}
-        for a in alunos_in:
+        lista_resultados = []
+        for idx_a, a in enumerate(alunos_in):
             tamanhos = a.get("tamanhos") or tamanhos_do_plano(a.get("tamanho") or "")
+            id_unico = str(a.get("id") or "")
+            linha_num = a.get("linha") or a.get("linhaPlanilha") or (idx_a + 1)
             pessoa = {
+                "id": id_unico,
+                "linha": linha_num,
                 "nome": a.get("nome") or "",
                 "sge": str(a.get("sge") or ""),
                 "contrato": so_contrato(a.get("contrato") or a.get("cont") or ""),
                 "tamanhos": tamanhos,
                 "planos": [a.get("tamanho")] if a.get("tamanho") else [],
             }
-            saida[pessoa["sge"] or str(a.get("id") or "")] = conferir_pessoa_no_servidor(pessoa, albuns, indice)
+            info_srv = conferir_pessoa_no_servidor(pessoa, albuns, indice)
+            lista_resultados.append(info_srv)
+            if id_unico:
+                saida[id_unico] = info_srv
+            saida[f"linha_{linha_num}"] = info_srv
+            chave_composta = f"{pessoa['sge']}|{normalizar(pessoa['nome'])}"
+            saida[chave_composta] = info_srv
+            if pessoa["sge"] and pessoa["sge"] not in saida:
+                saida[pessoa["sge"]] = info_srv
         resposta_json = {
             "ok": True,
             "servidor": str(albuns),
             "verificadoEm": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
             "resultados": saida,
+            "lista": lista_resultados,
         }
         print("JSON_CONFERENCIA_START:" + json.dumps(resposta_json, ensure_ascii=False))
         return
