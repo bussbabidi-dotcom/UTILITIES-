@@ -307,9 +307,10 @@ def aplicar_edicoes_locais_no_xlsx(caminho_xlsx):
         pass
 
 
-def _ler_diagramados_de_csv_local(etapa_filtro="diagramado"):
+def _ler_diagramados_de_csv_local(etapa_filtro="diagramado", silencioso=False):
     etapa_norm = normalizar(etapa_filtro or "diagramado")
     caminhos_csv = [
+        PASTA.parent / "public" / "assets" / "aistudio" / "ALBUNS_25_ffb84621.2",
         PASTA.parent / "public" / "assets" / "aistudio" / "ALBUNS_25_73835ec6.2",
         PASTA.parent / "ALBUNS_25_2_COLACAO.csv",
         PASTA / "ALBUNS_25_2_COLACAO.csv",
@@ -317,21 +318,34 @@ def _ler_diagramados_de_csv_local(etapa_filtro="diagramado"):
     arq_csv = next((c for c in caminhos_csv if c.is_file()), None)
     if not arq_csv:
         return []
+    edicoes_overlay = {}
+    try:
+        if EDICOES_LOCAIS.is_file():
+            dados_ov = json.loads(EDICOES_LOCAIS.read_text(encoding="utf-8"))
+            edicoes_overlay = dados_ov.get("linhas") or {}
+    except Exception:
+        edicoes_overlay = {}
+
     pessoas = {}
     with arq_csv.open("r", encoding="utf-8", errors="replace") as f:
         leitor = csv.reader(f)
         for numero, linha in enumerate(leitor, start=1):
             if numero <= 18 or len(linha) < 11:
                 continue
-            status_k = (linha[10] if len(linha) > 10 else "").strip()
+            ov_celulas = (edicoes_overlay.get(f"GERAL ENVIOS:{numero}") or {}).get("celulas") or {}
+            status_k = (ov_celulas.get("K") if "K" in ov_celulas else (linha[10] if len(linha) > 10 else "")).strip()
             if etapa_norm not in ("todos", "todas", "*") and normalizar(status_k) != etapa_norm:
                 continue
-            nome = (linha[2] if len(linha) > 2 else "").strip()
-            cont = so_contrato(linha[3] if len(linha) > 3 else "")
-            sge = limpar_sge(linha[4] if len(linha) > 4 else "")
-            plano = (linha[5] if len(linha) > 5 else "").strip()
-            codigo = re.sub(r"\s+", "", (linha[8] if len(linha) > 8 else "")).upper()
-            capa_plan = (linha[12] if len(linha) > 12 else "").strip()
+            nome = (ov_celulas.get("C") if "C" in ov_celulas else (linha[2] if len(linha) > 2 else "")).strip()
+            cont = so_contrato(ov_celulas.get("D") if "D" in ov_celulas else (linha[3] if len(linha) > 3 else ""))
+            sge = limpar_sge(ov_celulas.get("E") if "E" in ov_celulas else (linha[4] if len(linha) > 4 else ""))
+            plano = (ov_celulas.get("F") if "F" in ov_celulas else (linha[5] if len(linha) > 5 else "")).strip()
+            codigo = re.sub(
+                r"\s+",
+                "",
+                (ov_celulas.get("I") if "I" in ov_celulas else (linha[8] if len(linha) > 8 else "")),
+            ).upper()
+            capa_plan = (ov_celulas.get("M") if "M" in ov_celulas else (linha[12] if len(linha) > 12 else "")).strip()
             if not nome or not re.fullmatch(r"\d+", sge):
                 continue
             pessoa = pessoas.setdefault(sge, {
@@ -343,6 +357,7 @@ def _ler_diagramados_de_csv_local(etapa_filtro="diagramado"):
                 "aba": "GERAL ENVIOS",
                 "col_status": 11,
                 "col_capa": 13,
+                "status_planilha": status_k,
                 "capa_planilha": capa_plan,
                 "liberado_coluna_m": capa_liberada_na_planilha(capa_plan),
                 "planos": [],
@@ -350,6 +365,8 @@ def _ler_diagramados_de_csv_local(etapa_filtro="diagramado"):
                 "avisos": [],
                 "duplicados": [],
             })
+            if status_k and not pessoa.get("status_planilha"):
+                pessoa["status_planilha"] = status_k
             if capa_plan and not pessoa.get("capa_planilha"):
                 pessoa["capa_planilha"] = capa_plan
             if capa_liberada_na_planilha(capa_plan):
@@ -360,19 +377,20 @@ def _ler_diagramados_de_csv_local(etapa_filtro="diagramado"):
                 if tamanho not in pessoa["tamanhos"]:
                     pessoa["tamanhos"].append(tamanho)
     lista = list(pessoas.values())
-    qtd_liberados_m = sum(1 for p in lista if p.get("liberado_coluna_m"))
-    qtd_aguardando_m = len(lista) - qtd_liberados_m
-    print(
-        f"Aba: GERAL ENVIOS (CSV) | STATUS DIAGRAMADO (Coluna K): {len(lista)} | "
-        f"Liberados na Coluna M (CAPA): {qtd_liberados_m} | Aguardando OK na Coluna M: {qtd_aguardando_m}"
-    )
+    if not silencioso and etapa_norm == "diagramado":
+        qtd_liberados_m = sum(1 for p in lista if p.get("liberado_coluna_m"))
+        qtd_aguardando_m = len(lista) - qtd_liberados_m
+        print(
+            f"Aba: GERAL ENVIOS (CSV) | STATUS DIAGRAMADO (Coluna K): {len(lista)} | "
+            f"Liberados na Coluna M (CAPA): {qtd_liberados_m} | Aguardando OK na Coluna M: {qtd_aguardando_m}"
+        )
     return lista
 
 
-def ler_diagramados(etapa_filtro="diagramado"):
+def ler_diagramados(etapa_filtro="diagramado", silencioso=False):
     etapa_norm = normalizar(etapa_filtro or "diagramado")
     if proc.load_workbook is None:
-        return _ler_diagramados_de_csv_local(etapa_filtro)
+        return _ler_diagramados_de_csv_local(etapa_filtro, silencioso=silencioso)
     caminho = proc.baixar_planilha_link(PLANILHA_LINK, PLANILHA)
     aplicar_edicoes_locais_no_xlsx(caminho)
     livro = proc.load_workbook(caminho, data_only=True)
@@ -406,7 +424,8 @@ def ler_diagramados(etapa_filtro="diagramado"):
     for numero, linha in enumerate(folha.iter_rows(values_only=True), start=1):
         if numero <= linha_cab:
             continue
-        if etapa_norm not in ("todos", "todas", "*") and normalizar(celula(linha, colunas["status"])) != etapa_norm:
+        status_k = celula(linha, colunas["status"]).strip()
+        if etapa_norm not in ("todos", "todas", "*") and normalizar(status_k) != etapa_norm:
             continue
         nome = celula(linha, colunas["nome"]).strip()
         sge = limpar_sge(celula(linha, colunas["sge"]))
@@ -423,6 +442,7 @@ def ler_diagramados(etapa_filtro="diagramado"):
             "aba": nome_aba,
             "col_status": colunas["status"],
             "col_capa": colunas.get("capa") or COLUNA_CAPA_PADRAO,
+            "status_planilha": status_k,
             "capa_planilha": capa_plan,
             "liberado_coluna_m": capa_liberada_na_planilha(capa_plan),
             "planos": [],
@@ -430,6 +450,8 @@ def ler_diagramados(etapa_filtro="diagramado"):
             "avisos": [],
             "duplicados": [],
         })
+        if status_k and not pessoa.get("status_planilha"):
+            pessoa["status_planilha"] = status_k
         if capa_plan and not pessoa.get("capa_planilha"):
             pessoa["capa_planilha"] = capa_plan
         if capa_liberada_na_planilha(capa_plan):
@@ -446,13 +468,296 @@ def ler_diagramados(etapa_filtro="diagramado"):
             pessoa["avisos"].append("sem código MaisBook na coluna I — pesquisado pelo SGE")
         if not pessoa["contrato"]:
             pessoa["avisos"].append("sem contrato na planilha — conferido pelo SGE")
-    qtd_liberados_m = sum(1 for p in lista if p.get("liberado_coluna_m"))
-    qtd_aguardando_m = len(lista) - qtd_liberados_m
-    print(
-        f"Aba: {nome_aba} | STATUS DIAGRAMADO (Coluna K): {len(lista)} | "
-        f"Liberados na Coluna M (CAPA): {qtd_liberados_m} | Aguardando OK na Coluna M: {qtd_aguardando_m}"
-    )
+    if not silencioso and etapa_norm == "diagramado":
+        qtd_liberados_m = sum(1 for p in lista if p.get("liberado_coluna_m"))
+        qtd_aguardando_m = len(lista) - qtd_liberados_m
+        print(
+            f"Aba: {nome_aba} | STATUS DIAGRAMADO (Coluna K): {len(lista)} | "
+            f"Liberados na Coluna M (CAPA): {qtd_liberados_m} | Aguardando OK na Coluna M: {qtd_aguardando_m}"
+        )
     return lista
+
+
+def diagnosticar_elegibilidade_lote(origem_srv=None, sge_filtro="", ignorar_col_m=False):
+    """
+    Analisa todos os formandos da planilha e calcula exatamente por qual critério de filtragem
+    cada formando foi aprovado ou reprovado para o envio em lote no MaisBook:
+      1. Filtro 1 — Status na Coluna K (precisa ser DIAGRAMADO)
+      2. Filtro 2 — Histórico de Já Enviados (envio_aprovacao_feitos.json)
+      3. Filtro 3 — Trava da Coluna M (CAPA preenchida/liberada vs. capa nula/vazia/em produção)
+      4. Filtro 4 — Conferência Física no Servidor (TEM ÁLBUM JPG + TEM CAPA)
+    """
+    todos = ler_diagramados(etapa_filtro="todos", silencioso=True)
+    feitos = carregar_json(FEITOS)
+    sge_alvo = limpar_sge(sge_filtro) if sge_filtro else ""
+
+    if sge_alvo:
+        todos_filtrados = [p for p in todos if p["sge"] == sge_alvo]
+    else:
+        todos_filtrados = list(todos)
+
+    contagem_status_k = {}
+    aprovados_status_k = []
+    reprovados_status_k = []
+
+    for p in todos_filtrados:
+        st_bruto = (p.get("status_planilha") or "").strip() or "(vazio)"
+        contagem_status_k[st_bruto] = contagem_status_k.get(st_bruto, 0) + 1
+        if normalizar(st_bruto) == "diagramado":
+            aprovados_status_k.append(p)
+        else:
+            reprovados_status_k.append({
+                "linha": p["linha"],
+                "sge": p["sge"],
+                "nome": p["nome"],
+                "status_k": st_bruto,
+                "capa_m": p.get("capa_planilha") or "(vazia)",
+                "criterio": "STATUS_INCORRETO_COL_K",
+                "motivo": f"Coluna K está em '{st_bruto}' (exige DIAGRAMADO)",
+            })
+
+    ja_enviados = []
+    nao_enviados = []
+    for p in aprovados_status_k:
+        if p["sge"] in feitos:
+            info_feito = feitos.get(p["sge"]) or {}
+            ja_enviados.append({
+                "linha": p["linha"],
+                "sge": p["sge"],
+                "nome": p["nome"],
+                "status_k": p.get("status_planilha") or "DIAGRAMADO",
+                "capa_m": p.get("capa_planilha") or "(vazia)",
+                "criterio": "JA_ENVIADO_HISTORICO",
+                "motivo": f"Consta em envio_aprovacao_feitos.json ({info_feito.get('data', 'anteriormente')})",
+            })
+        else:
+            nao_enviados.append(p)
+
+    aprovados_col_m = []
+    reprovados_capa_nula = []
+    for p in nao_enviados:
+        if ignorar_col_m or p.get("liberado_coluna_m"):
+            aprovados_col_m.append(p)
+        else:
+            val_m = p.get("capa_planilha") or ""
+            reprovados_capa_nula.append({
+                "linha": p["linha"],
+                "sge": p["sge"],
+                "nome": p["nome"],
+                "status_k": p.get("status_planilha") or "DIAGRAMADO",
+                "capa_m": val_m or "(nula/vazia)",
+                "criterio": "CAPA_NULA_COLUNA_M",
+                "motivo": f"Coluna M (CAPA) está {'nula/vazia' if not val_m else repr(val_m)} — exige OK/DIAGRAMADO/CAPA",
+            })
+
+    albuns_dir = None
+    indice_srv = {}
+    erro_servidor = ""
+    try:
+        albuns_dir, indice_srv = preparar_indice(origem_srv)
+    except Exception as e:
+        erro_servidor = str(e)
+
+    elegiveis_confirmados = []
+    bloqueados_falta_capa_srv = []
+    bloqueados_falta_album_srv = []
+    bloqueados_sem_arquivos_srv = []
+    detalhes_diagramados = []
+
+    for p in aprovados_status_k:
+        ja_env = p["sge"] in feitos
+        lib_m = bool(ignorar_col_m or p.get("liberado_coluna_m"))
+        info_srv = None
+        if albuns_dir is not None:
+            try:
+                info_srv = conferir_pessoa_no_servidor(p, albuns_dir, indice_srv)
+            except Exception as err_p:
+                info_srv = {
+                    "completo": False,
+                    "temAlbum": False,
+                    "temCapa": False,
+                    "resumoAlbum": "Erro ao conferir",
+                    "resumoCapa": "Erro ao conferir",
+                    "resumoGeral": str(err_p),
+                    "mensagem": str(err_p),
+                }
+
+        if ja_env:
+            criterio_final = "JA_ENVIADO_HISTORICO"
+            motivo_final = "Já consta em envio_aprovacao_feitos.json"
+            elegivel = False
+        elif not lib_m:
+            criterio_final = "CAPA_NULA_COLUNA_M"
+            motivo_final = f"Coluna M (CAPA) nula/vazia ({p.get('capa_planilha') or 'vazia'})"
+            elegivel = False
+        elif info_srv is None:
+            criterio_final = "CONFERENCIA_SERVIDOR_PENDENTE"
+            motivo_final = f"Pasta do servidor não acessível ({erro_servidor or 'não conferido'})"
+            elegivel = False
+        elif info_srv.get("completo"):
+            criterio_final = "ELEGIVEL_PRONTO"
+            motivo_final = f"Elegível: Col.K=DIAGRAMADO + Col.M='{p.get('capa_planilha')}' + Servidor OK ({info_srv.get('resumoAlbum')} | {info_srv.get('resumoCapa')})"
+            elegivel = True
+            elegiveis_confirmados.append({
+                "linha": p["linha"],
+                "sge": p["sge"],
+                "nome": p["nome"],
+                "tamanho": ", ".join(p.get("tamanhos") or []),
+                "status_k": p.get("status_planilha") or "DIAGRAMADO",
+                "capa_m": p.get("capa_planilha") or "OK",
+                "resumo_album": info_srv.get("resumoAlbum"),
+                "resumo_capa": info_srv.get("resumoCapa"),
+                "criterio": criterio_final,
+                "motivo": motivo_final,
+            })
+        elif info_srv.get("temAlbum") and not info_srv.get("temCapa"):
+            criterio_final = "SERVIDOR_FALTA_CAPA"
+            motivo_final = f"Tem Álbum ({info_srv.get('resumoAlbum')}), mas FALTA CAPA no servidor ({info_srv.get('resumoCapa')})"
+            elegivel = False
+            bloqueados_falta_capa_srv.append({
+                "linha": p["linha"],
+                "sge": p["sge"],
+                "nome": p["nome"],
+                "capa_m": p.get("capa_planilha") or "OK",
+                "criterio": criterio_final,
+                "motivo": motivo_final,
+            })
+        elif info_srv.get("temCapa") and not info_srv.get("temAlbum"):
+            criterio_final = "SERVIDOR_FALTA_ALBUM"
+            motivo_final = f"Tem Capa ({info_srv.get('resumoCapa')}), mas FALTA ÁLBUM/LÂMINAS no servidor ({info_srv.get('resumoAlbum')})"
+            elegivel = False
+            bloqueados_falta_album_srv.append({
+                "linha": p["linha"],
+                "sge": p["sge"],
+                "nome": p["nome"],
+                "capa_m": p.get("capa_planilha") or "OK",
+                "criterio": criterio_final,
+                "motivo": motivo_final,
+            })
+        else:
+            criterio_final = "SERVIDOR_SEM_ALBUM_E_SEM_CAPA"
+            motivo_final = f"Sem Álbum e Sem Capa no servidor ({info_srv.get('resumoAlbum')} | {info_srv.get('resumoCapa')})"
+            elegivel = False
+            bloqueados_sem_arquivos_srv.append({
+                "linha": p["linha"],
+                "sge": p["sge"],
+                "nome": p["nome"],
+                "capa_m": p.get("capa_planilha") or "OK",
+                "criterio": criterio_final,
+                "motivo": motivo_final,
+            })
+
+        detalhes_diagramados.append({
+            "linha": p["linha"],
+            "sge": p["sge"],
+            "nome": p["nome"],
+            "contrato": p.get("contrato") or "",
+            "tamanhos": p.get("tamanhos") or [],
+            "status_k": p.get("status_planilha") or "DIAGRAMADO",
+            "capa_m": p.get("capa_planilha") or "",
+            "liberado_col_m": lib_m,
+            "ja_enviado": ja_env,
+            "servidor_conferido": info_srv is not None,
+            "servidor_completo": bool(info_srv and info_srv.get("completo")),
+            "resumo_album_srv": info_srv.get("resumoAlbum") if info_srv else "Conferência pendente",
+            "resumo_capa_srv": info_srv.get("resumoCapa") if info_srv else "Conferência pendente",
+            "elegivel": elegivel,
+            "criterio": criterio_final,
+            "motivo": motivo_final,
+        })
+
+    causa_zero = ""
+    if len(elegiveis_confirmados) == 0:
+        if sge_alvo and not todos_filtrados:
+            causa_zero = f"Filtro --sge {sge_alvo} ativo, mas esse SGE não existe na planilha."
+        elif sge_alvo and not aprovados_status_k:
+            st_atual = todos_filtrados[0].get("status_planilha") or "(vazio)"
+            causa_zero = (
+                f"Filtro --sge {sge_alvo} ({todos_filtrados[0]['nome']}) ativo, mas o STATUS na Coluna K é "
+                f"'{st_atual}' (precisa ser DIAGRAMADO). Limpe o campo SGE para enviar o lote completo!"
+            )
+        elif not aprovados_status_k:
+            causa_zero = "Nenhum formando está com STATUS = DIAGRAMADO na Coluna K da planilha atual."
+        elif not nao_enviados:
+            causa_zero = f"Todos os {len(aprovados_status_k)} formandos DIAGRAMADO já constam como enviados em envio_aprovacao_feitos.json."
+        elif not aprovados_col_m:
+            causa_zero = f"Todos os {len(nao_enviados)} formandos DIAGRAMADO estão com a Coluna M (CAPA) nula/vazia."
+        else:
+            total_bloq_srv = len(bloqueados_falta_capa_srv) + len(bloqueados_falta_album_srv) + len(bloqueados_sem_arquivos_srv)
+            causa_zero = (
+                f"Há {len(aprovados_col_m)} formando(s) com STATUS=DIAGRAMADO e Coluna M liberada, "
+                f"mas todos os {total_bloq_srv} foram bloqueados na Conferência Física do Servidor "
+                f"(Falta Capa: {len(bloqueados_falta_capa_srv)}, Falta Álbum: {len(bloqueados_falta_album_srv)}, "
+                f"Sem Álbum/Capa: {len(bloqueados_sem_arquivos_srv)})."
+            )
+
+    return {
+        "verificadoEm": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
+        "servidor": str(albuns_dir) if albuns_dir else (origem_srv or ""),
+        "erroServidor": erro_servidor,
+        "sgeFiltroAtivo": sge_alvo,
+        "ignorarColunaM": bool(ignorar_col_m),
+        "funil": {
+            "totalPlanilha": len(todos_filtrados),
+            "reprovadosStatusIncorretoColK": len(reprovados_status_k),
+            "aprovadosStatusDiagramadoColK": len(aprovados_status_k),
+            "reprovadosJaEnviadosHistorico": len(ja_enviados),
+            "reprovadosCapaNulaColM": len(reprovados_capa_nula),
+            "aprovadosColunaMCapa": len(aprovados_col_m),
+            "reprovadosServidorFaltaCapa": len(bloqueados_falta_capa_srv),
+            "reprovadosServidorFaltaAlbum": len(bloqueados_falta_album_srv),
+            "reprovadosServidorSemArquivos": len(bloqueados_sem_arquivos_srv),
+            "elegiveisConfirmados": len(elegiveis_confirmados),
+        },
+        "distribuicaoStatusColK": contagem_status_k,
+        "causaZeroElegiveis": causa_zero,
+        "elegiveis": elegiveis_confirmados,
+        "reprovadosCapaNula": reprovados_capa_nula,
+        "jaEnviados": ja_enviados,
+        "bloqueadosFaltaCapaServidor": bloqueados_falta_capa_srv,
+        "bloqueadosFaltaAlbumServidor": bloqueados_falta_album_srv,
+        "bloqueadosSemArquivosServidor": bloqueados_sem_arquivos_srv,
+        "detalhesDiagramados": detalhes_diagramados,
+    }
+
+
+def imprimir_diagnostico_elegibilidade(diag):
+    f = diag["funil"]
+    print("\n" + "=" * 82)
+    print("DIAGNÓSTICO DE ELEGIBILIDADE — ENVIO EM LOTE MAISBOOK (CRITÉRIOS DE FILTRAGEM)")
+    print("=" * 82)
+    if diag.get("sgeFiltroAtivo"):
+        print(f"⚠ ATENÇÃO — FILTRO INDIVIDUAL SGE ATIVO: --sge {diag['sgeFiltroAtivo']}")
+    print(f"Pasta do Servidor Analisada : {diag.get('servidor') or '(não encontrada)'}")
+    print("-" * 82)
+    print(f"  [0] Total de formandos analisados na planilha .............: {f['totalPlanilha']}")
+    print(f"  [1] Reprovados por Status Incorreto (Coluna K != DIAGRAMADO): -{f['reprovadosStatusIncorretoColK']}")
+    for st_nome, st_qtd in sorted(diag.get("distribuicaoStatusColK", {}).items(), key=lambda x: -x[1]):
+        marcador = "✔ ELEGÍVEL NA COL. K" if normalizar(st_nome) == "diagramado" else "✖ Ignorado no lote"
+        print(f"        • {st_nome:<24}: {st_qtd:>3} formando(s) [{marcador}]")
+    print(f"      -> Passaram no Filtro 1 (Coluna K = DIAGRAMADO) .......: {f['aprovadosStatusDiagramadoColK']}")
+    print(f"  [2] Reprovados por Já Constarem Enviados (feitos.json) ....: -{f['reprovadosJaEnviadosHistorico']}")
+    print(f"  [3] Reprovados por Capa Nula/Vazia na Coluna M (CAPA) .....: -{f['reprovadosCapaNulaColM']}")
+    print(f"      -> Passaram nos Filtros 1+2+3 (Prontos na Planilha) ...: {f['aprovadosColunaMCapa']}")
+    print(f"  [4] Conferência Física no Servidor (Álbum JPG + Capa):")
+    print(f"        • Bloqueados — Falta Capa no Servidor (Só Álbum) ....: -{f['reprovadosServidorFaltaCapa']}")
+    print(f"        • Bloqueados — Falta Álbum/Lâminas (Só Capa/Incomp.) : -{f['reprovadosServidorFaltaAlbum']}")
+    print(f"        • Bloqueados — Sem Álbum e Sem Capa no Servidor .....: -{f['reprovadosServidorSemArquivos']}")
+    print("-" * 82)
+    print(f"  [✔] PESSOAS ELEGÍVEIS CONFIRMADAS PARA ENVIO EM LOTE ......: {f['elegiveisConfirmados']}")
+    if diag.get("causaZeroElegiveis"):
+        print(f"\n  🚨 CAUSA RAIZ DE 0 PESSOAS ELEGÍVEIS:\n     {diag['causaZeroElegiveis']}")
+    print("=" * 82)
+
+    if diag.get("detalhesDiagramados"):
+        print("\nDETALHAMENTO INDIVIDUAL DOS FORMANDOS COM STATUS = DIAGRAMADO:")
+        for d in diag["detalhesDiagramados"]:
+            icone = "✔ ELEGÍVEL" if d["elegivel"] else f"✖ BLOQUEADO [{d['criterio']}]"
+            print(
+                f"  Linha {d['linha']:>3} | SGE {d['sge']:<6} | {d['nome']:<35} | "
+                f"Col.M={d['capa_m'] or '(nula)':<10} | {icone} -> {d['motivo']}"
+            )
+        print("=" * 82)
 
 
 
@@ -1362,18 +1667,44 @@ def voltar_para_pasta(pagina, nome):
 
 
 def abrir_drive(contexto, linha):
-    link = linha.locator('a[title="Abrir pasta no Drive"]')
-    if not link.count():
+    links = linha.locator('a[title="Abrir pasta no Drive"], a[title*="Drive" i], a[href*="drive.google.com"]')
+    qtd = links.count()
+    if not qtd:
         raise PararPessoa("erro no Drive", "não achei o botão do Drive neste cliente")
-    endereco = (link.first.get_attribute("href") or "").strip()
-    if "drive.google.com" in endereco:
-        drive = contexto.new_page()
-        drive.goto(endereco, wait_until="domcontentloaded", timeout=60000)
-        return drive, True
-    link.first.scroll_into_view_if_needed()
+
+    # 1. Se qualquer link já tiver o href direto da pasta do Google Drive, abre direto sem depender de clique visual
+    for i in range(qtd):
+        try:
+            endereco = (links.nth(i).get_attribute("href") or "").strip()
+            if "drive.google.com" in endereco:
+                drive = contexto.new_page()
+                drive.goto(endereco, wait_until="domcontentloaded", timeout=60000)
+                return drive, True
+        except Exception:
+            continue
+
+    # 2. Escolhe o link visível (no modo Compacto do MaisBook o primeiro link pode estar oculto nos detalhes colapsados)
+    alvo = links.first
+    for i in range(qtd):
+        cand = links.nth(i)
+        try:
+            if cand.is_visible():
+                alvo = cand
+                break
+        except Exception:
+            continue
+
     antes = list(contexto.pages)
-    link.first.click()
-    limite = time.time() + 8
+    try:
+        alvo.scroll_into_view_if_needed(timeout=5000)
+        alvo.click(timeout=10000)
+    except Exception:
+        try:
+            alvo.evaluate("el => el.click()")
+        except Exception as erro_click:
+            raise PararPessoa("erro no Drive", f"não consegui clicar no botão do Drive ({base.erro_curto(erro_click)})")
+
+    limite = time.time() + 10
     while time.time() < limite:
         novas = [pagina for pagina in contexto.pages if pagina not in antes]
         if novas:
@@ -2036,6 +2367,8 @@ def analisar_argumentos():
     parser.add_argument("--simular", action="store_true", help="procura e abre o cliente, sem pasta, sem arquivo e sem e-mail")
     parser.add_argument("--continuar", action="store_true", help="retoma quem ainda não foi enviado")
     parser.add_argument("--listar", action="store_true", help="só lista quem está com STATUS DIAGRAMADO e o status da Coluna M (CAPA)")
+    parser.add_argument("--diagnostico", action="store_true", help="exibe diagnóstico detalhado do funil de elegibilidade do envio em lote")
+    parser.add_argument("--diagnostico-json", action="store_true", help="retorna JSON com o diagnóstico detalhado de elegibilidade")
     parser.add_argument("--conferir-servidor", action="store_true", help="confere fisicamente no servidor se cada formando tem CAPA e ÁLBUM completos")
     parser.add_argument("--etapa", default="DIAGRAMADO", help="etapa da Coluna K a ser conferida no servidor (padrão: DIAGRAMADO)")
     parser.add_argument("--conferir-json", help="JSON de entrada ou caminho para conferir lista de alunos no servidor e devolver JSON")
@@ -2056,6 +2389,12 @@ def executar_rodada(args, em_vigia=False):
         pessoas = [pessoa for pessoa in pessoas if pessoa["sge"] == codigo]
         if not pessoas:
             print(f"O código {args.sge} não está com STATUS DIAGRAMADO.")
+            diag = diagnosticar_elegibilidade_lote(
+                origem_srv=getattr(args, "origem", None),
+                sge_filtro=codigo,
+                ignorar_col_m=getattr(args, "ignorar_coluna_m", False),
+            )
+            imprimir_diagnostico_elegibilidade(diag)
             return 0
     if args.listar:
         liberados = 0
@@ -2124,6 +2463,12 @@ def executar_rodada(args, em_vigia=False):
     print("=" * 70)
     if not pessoas:
         print("Nenhuma pessoa liberada na Coluna M (CAPA) para processar agora.")
+        diag = diagnosticar_elegibilidade_lote(
+            origem_srv=getattr(args, "origem", None),
+            sge_filtro=getattr(args, "sge", "") or "",
+            ignorar_col_m=getattr(args, "ignorar_coluna_m", False),
+        )
+        imprimir_diagnostico_elegibilidade(diag)
         return 0
 
     if not em_vigia:
@@ -2392,6 +2737,22 @@ def main():
             "resultados": saida,
         }
         print("JSON_CONFERENCIA_START:" + json.dumps(resposta_json, ensure_ascii=False))
+        return
+    if getattr(args, "diagnostico_json", False):
+        diag = diagnosticar_elegibilidade_lote(
+            origem_srv=getattr(args, "origem", None),
+            sge_filtro=getattr(args, "sge", "") or "",
+            ignorar_col_m=getattr(args, "ignorar_coluna_m", False),
+        )
+        print("JSON_DIAGNOSTICO_START:" + json.dumps(diag, ensure_ascii=False))
+        return
+    if getattr(args, "diagnostico", False):
+        diag = diagnosticar_elegibilidade_lote(
+            origem_srv=getattr(args, "origem", None),
+            sge_filtro=getattr(args, "sge", "") or "",
+            ignorar_col_m=getattr(args, "ignorar_coluna_m", False),
+        )
+        imprimir_diagnostico_elegibilidade(diag)
         return
     if getattr(args, "conferir_servidor", False):
         executar_conferencia_servidor_cli(args)
