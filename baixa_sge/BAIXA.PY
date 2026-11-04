@@ -224,18 +224,118 @@ def codigo_base(sge, cfg):
 
 
 def indice_coluna(coluna):
-    from openpyxl.utils import column_index_from_string
-
     coluna = str(coluna or "").strip()
     if not coluna:
         return None
     if coluna.isdigit():
         return int(coluna)
-    return column_index_from_string(coluna.upper())
+    try:
+        from openpyxl.utils import column_index_from_string
+        return column_index_from_string(coluna.upper())
+    except ImportError:
+        resultado = 0
+        for ch in coluna.upper():
+            if "A" <= ch <= "Z":
+                resultado = resultado * 26 + (ord(ch) - ord("A") + 1)
+        return resultado or None
+
+
+class _FolhaSimples:
+    def __init__(self, title, linhas):
+        self.title = title
+        self._linhas = linhas
+
+    def iter_rows(self, values_only=True):
+        return iter(self._linhas)
+
+
+class _LivroSimples:
+    def __init__(self, abas_dict):
+        self._abas = abas_dict
+        self.sheetnames = list(abas_dict.keys())
+        self.active = abas_dict[self.sheetnames[0]] if self.sheetnames else None
+
+    def __getitem__(self, nome):
+        return self._abas[nome]
+
+    def close(self):
+        pass
+
+
+def _abrir_xlsx_sem_openpyxl(caminho):
+    import csv as _csv
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    caminho_p = Path(caminho)
+    if caminho_p.suffix.lower() in (".csv", ".2") or (caminho_p.is_file() and caminho_p.read_bytes()[:2] != b"PK"):
+        with caminho_p.open("r", encoding="utf-8", errors="replace") as f:
+            linhas = [tuple(row) for row in _csv.reader(f)]
+        return _LivroSimples({"GERAL ENVIOS": _FolhaSimples("GERAL ENVIOS", linhas)})
+
+    ns = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(caminho_p, "r") as zf:
+        shared = []
+        if "xl/sharedStrings.xml" in zf.namelist():
+            root_ss = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for si in root_ss.findall("main:si", ns):
+                textos = [t.text or "" for t in si.findall(".//main:t", ns)]
+                shared.append("".join(textos))
+
+        wb_root = ET.fromstring(zf.read("xl/workbook.xml"))
+        rels_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+        rid_to_target = {}
+        for rel in rels_root:
+            rid_to_target[rel.attrib.get("Id", "")] = rel.attrib.get("Target", "")
+
+        abas = {}
+        for sheet_el in wb_root.findall(".//main:sheet", ns):
+            nome_aba = sheet_el.attrib.get("name", "Sheet1")
+            rid = sheet_el.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
+            target = rid_to_target.get(rid, "").lstrip("/")
+            if not target.startswith("xl/"):
+                target = "xl/" + target
+            if target not in zf.namelist():
+                continue
+            ws_root = ET.fromstring(zf.read(target))
+            linhas_aba = []
+            num_linha_atual = 0
+            for row_el in ws_root.findall(".//main:sheetData/main:row", ns):
+                r_idx = int(row_el.attrib.get("r", num_linha_atual + 1))
+                while num_linha_atual + 1 < r_idx:
+                    linhas_aba.append(())
+                    num_linha_atual += 1
+                num_linha_atual = r_idx
+                celulas_linha = {}
+                max_col = 0
+                for c_el in row_el.findall("main:c", ns):
+                    ref = c_el.attrib.get("r", "")
+                    letras = "".join(ch for ch in ref if ch.isalpha())
+                    c_idx = indice_coluna(letras) or (max_col + 1)
+                    max_col = max(max_col, c_idx)
+                    tipo = c_el.attrib.get("t", "")
+                    v_el = c_el.find("main:v", ns)
+                    is_el = c_el.find("main:is", ns)
+                    val = ""
+                    if tipo == "s" and v_el is not None and v_el.text is not None:
+                        s_idx = int(v_el.text)
+                        val = shared[s_idx] if 0 <= s_idx < len(shared) else ""
+                    elif tipo == "inlineStr" and is_el is not None:
+                        val = "".join(t.text or "" for t in is_el.findall(".//main:t", ns))
+                    elif v_el is not None and v_el.text is not None:
+                        val = v_el.text
+                    celulas_linha[c_idx] = val
+                tupla = tuple(celulas_linha.get(i, "") for i in range(1, max_col + 1))
+                linhas_aba.append(tupla)
+            abas[nome_aba] = _FolhaSimples(nome_aba, linhas_aba)
+        return _LivroSimples(abas)
 
 
 def abrir_planilha(caminho):
-    from openpyxl import load_workbook
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return _abrir_xlsx_sem_openpyxl(caminho)
 
     try:
         return load_workbook(caminho, data_only=True, read_only=True)
@@ -1857,7 +1957,8 @@ def rodar(cfg, args):
     from playwright.sync_api import sync_playwright
 
     alunos = ler_planilha(cfg)
-    if args.status:
+    tem_coluna_status_preenchida = any((a.get("status") or "").strip() for a in alunos)
+    if args.status and args.sge:
         for aluno in alunos:
             aluno["status"] = args.status
     data_da_rodada(cfg)
@@ -1890,7 +1991,24 @@ def rodar(cfg, args):
                         f"ℹ Execução individual (--sge {args.sge}): aluno '{a['nome']}' está com Coluna K='{status_orig}' "
                         f"-> aplicando '{novo_st}' no SGE."
                     )
-    elif not args.status:
+    elif args.status:
+        # No lote com --status selecionado (ex.: "Enviado para Aprovação"), se a planilha tiver a Coluna K (STATUS),
+        # filtra apenas os alunos cuja Coluna K corresponde a essa etapa do SGE (não sobrescreve "Sem álbum"!)
+        alvo_norm = normalizar(status_desejado(cfg, args.status))
+        if tem_coluna_status_preenchida:
+            filtrados_etapa = [
+                a for a in alunos
+                if status_tem_acao_sge(cfg, a["status"])
+                and normalizar(status_desejado(cfg, a["status"])) == alvo_norm
+            ]
+            print(
+                f"Filtro de Lote SGE (--status '{args.status}'): {len(filtrados_etapa)} de {len(alunos)} "
+                f"formandos estão na etapa correspondente da Coluna K."
+            )
+            alunos = filtrados_etapa
+        for aluno in alunos:
+            aluno["status"] = args.status
+    else:
         # No lote automático (sem --sge e sem --status fixo), filtra linhas cuja Coluna K tem ação no SGE
         alunos = [a for a in alunos if status_tem_acao_sge(cfg, a["status"])]
 
