@@ -336,19 +336,25 @@ JS_ID_CLIENTE = r"""
 """
 
 JS_ID_POR_NOME = r"""
-(nome) => {
+(dados) => {
   const norm = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/\s+/g, ' ').trim().toUpperCase();
+  const nome = typeof dados === 'string' ? dados : (dados && dados.nome) || '';
+  const codigos = (typeof dados === 'object' && dados && Array.isArray(dados.codigos) ? dados.codigos : [])
+    .map(c => norm(c)).filter(Boolean);
   const palavras = norm(nome).split(' ').filter(p => p.length > 2).slice(0, 2);
   if (!palavras.length) return null;
   const editars = [...document.querySelectorAll('[title="Editar"][data-cliente-id]')];
   const achados = [];
   for (const ed of editars) {
-    let card = ed.parentElement;
+    let card = ed.closest('.clientes-grid-row[data-cliente-id]') || ed.parentElement;
     for (let i = 0; i < 10 && card && card !== document.body; i++, card = card.parentElement) {
       const texto = norm(card.innerText);
       if (texto.length > 2500) break;
-      if (palavras.every(p => texto.includes(p))) {
+      const tokens = texto.split(/[^A-Z0-9._-]+/).filter(Boolean);
+      const nomeBate = palavras.every(p => texto.includes(p));
+      const codigoBate = !codigos.length || codigos.some(cod => tokens.includes(cod) || texto.includes(cod));
+      if (nomeBate && codigoBate) {
         achados.push(ed.getAttribute('data-cliente-id'));
         break;
       }
@@ -503,16 +509,41 @@ def digitar_cpf(campo, cpf):
         raise AlunoPulado("ERRO", f"MaisBook: não consegui digitar o CPF (ficou '{campo.input_value()}')")
 
 
+def codigo_bate_no_modal(pagina, aluno, campos):
+    """Confere se o código na janela do MaisBook bate com o código MaisBook (Col. I) ou com o SGE da planilha."""
+    cod_interno = (campos.get("cliente_codigo_interno") or "").strip().upper()
+    sge_plan = (aluno.get("sge") or "").strip().upper()
+    cod_mb_plan = (aluno.get("codigo_mb") or "").strip().upper()
+    for esperado in (cod_mb_plan, sge_plan):
+        if not esperado:
+            continue
+        if cod_interno and cod_interno == esperado:
+            return True
+        try:
+            if pagina.evaluate(JS_CODIGO_NA_JANELA, esperado):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def abrir_cliente(mb, aluno):
-    """Abre o Editar do aluno no MaisBook, confere o nome e devolve (modal, campos)."""
+    """
+    Abre o Editar do aluno no MaisBook procurando primeiro pelo Código do MaisBook;
+    caso não encontre pelo código, procura pelo nome como exceção, mas continua comparando
+    obrigatoriamente se TANTO o nome QUANTO o código batem.
+    """
 
     pagina = mb.pagina
     try:
         modal = abrir_edicao(mb, aluno)
     except AlunoPulado as pulo:
-        # numa colagem anterior o site pode ter trocado o código: tenta achar só pelo nome
-        if pulo.resultado != "NAO ENCONTRADO" or not mb.real:
+        if pulo.resultado != "NAO ENCONTRADO":
             raise
+        print(
+            f"    exceção MaisBook: não encontrado pelo código '{codigo_maisbook(aluno)}' — "
+            f"procurando pelo nome '{aluno.get('nome')}' (comparando nome + código)..."
+        )
         modal = abrir_por_nome(mb, aluno)
         if modal is None:
             raise
@@ -520,6 +551,13 @@ def abrir_cliente(mb, aluno):
     if aluno["nome"] and not nomes_batem(aluno["nome"], campos.get("cliente_nome", "")):
         fechar_edicao(modal, pagina)
         raise AlunoPulado("ERRO", f"MaisBook: nome '{campos.get('cliente_nome')}' não bate com a planilha — nada alterado")
+    if not codigo_bate_no_modal(pagina, aluno, campos):
+        fechar_edicao(modal, pagina)
+        raise AlunoPulado(
+            "NAO ENCONTRADO",
+            f"MaisBook: cliente achado pelo nome '{campos.get('cliente_nome')}', mas o código ('{campos.get('cliente_codigo_interno')}') "
+            f"não bate com o código esperado ({codigo_maisbook(aluno)} / SGE {aluno.get('sge')}) — nada alterado",
+        )
     return modal, campos
 
 
@@ -617,15 +655,23 @@ def reabrir(mb, aluno, cliente_id):
 
 
 def abrir_por_nome(mb, aluno):
-    """Abre o cliente achado pelo nome, se houver exatamente um cartão batendo."""
+    """
+    Exceção: procura o cliente pelo nome caso não tenha encontrado pelo código do MaisBook,
+    exigindo que no cartão tanto o nome quanto o código (MaisBook ou SGE) batam.
+    """
 
     nome = (aluno.get("nome") or "").strip()
     if not nome:
         return None
+    codigos_validos = [c for c in ((aluno.get("codigo_mb") or "").strip(), (aluno.get("sge") or "").strip()) if c]
     pagina = mb.pagina
     base.ir(pagina, f"{mb.cfg['url_maisbook']}&acao=listar&search={quote(nome)}", mb.timeout)
+    if pagina.locator("#user_login").count():
+        if not login_maisbook(pagina, mb.timeout):
+            raise AlunoPulado("ERRO", "O MaisBook pediu login e não consegui entrar (confira maisbook_credenciais.json)")
+        base.ir(pagina, f"{mb.cfg['url_maisbook']}&acao=listar&search={quote(nome)}", mb.timeout)
     pagina.wait_for_timeout(1500)
-    achado = pagina.evaluate(JS_ID_POR_NOME, nome)
+    achado = pagina.evaluate(JS_ID_POR_NOME, {"nome": nome, "codigos": codigos_validos})
     if not achado:
         return None
     return abrir_edicao(mb, aluno, cliente_id=achado, busca=nome)
