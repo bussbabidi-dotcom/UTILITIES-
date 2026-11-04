@@ -468,17 +468,11 @@ def link_exportacao(link):
 
         raise ValueError(f"Link da planilha inválido: {link}")
 
-    gid = re.search(r"[#&?]gid=(\d+)", link)
-
     url = (
         "https://docs.google.com/spreadsheets/d/"
         + achado.group(1)
         + "/export?format=xlsx"
     )
-
-    if gid:
-
-        url += "&gid=" + gid.group(1)
 
     return url
 
@@ -681,10 +675,41 @@ def cabecalhos_planilha(sheet, coluna_plano=None):
 
             return numero, colunas
 
+    # Fallback para abas sem linha de cabeçalho (ex.: Página49 onde Col A = Nome e Col B = Tamanho/Plano)
+    col_plano_auto = coluna_plano
+    col_nome_auto = None
+    if not col_plano_auto and linhas_amostra:
+        max_cols = max((len(l) for l in linhas_amostra if l), default=0)
+        melhor_col_p = (0, None)
+        for c_idx in range(1, max_cols + 1):
+            hits = sum(
+                1
+                for l in linhas_amostra[:25]
+                if c_idx <= len(l) and tamanho_do_plano(l[c_idx - 1])
+            )
+            if hits > melhor_col_p[0]:
+                melhor_col_p = (hits, c_idx)
+        if melhor_col_p[0] >= 2:
+            col_plano_auto = melhor_col_p[1]
+            # Procura a coluna de nome (texto longo com espaços que não seja plano nem curso comum)
+            for c_idx in range(1, max_cols + 1):
+                if c_idx == col_plano_auto:
+                    continue
+                nomes_validos = sum(
+                    1
+                    for l in linhas_amostra[:25]
+                    if c_idx <= len(l)
+                    and len(normalizar(l[c_idx - 1]).split()) >= 2
+                    and not tamanho_do_plano(l[c_idx - 1])
+                )
+                if nomes_validos >= 2:
+                    col_nome_auto = c_idx
+                    break
+
     return 0, {
-        "nome": COLUNA_NOME,
+        "nome": col_nome_auto or COLUNA_NOME,
         "codigo": COLUNA_CODIGO,
-        "plano": coluna_plano or COLUNA_PRODUTO,
+        "plano": col_plano_auto or COLUNA_PRODUTO,
     }
 
 
