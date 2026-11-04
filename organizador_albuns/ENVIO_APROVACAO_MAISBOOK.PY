@@ -1209,8 +1209,54 @@ def ir_clientes(pagina, sge):
     return url
 
 
+def normalizar_codigo_mb(valor):
+    return re.sub(r"\s+", "", str(valor or "")).upper()
+
+
 def termo_busca(pessoa):
-    return pessoa.get("codigo") or pessoa["sge"]
+    return (
+        (pessoa.get("termo_busca_efetivo") or "").strip()
+        or (pessoa.get("codigo") or "").strip()
+        or (pessoa.get("sge") or "").strip()
+        or (pessoa.get("nome") or "").strip()
+    )
+
+
+def termos_busca_candidatos(pessoa):
+    """
+    Ordem de busca no MaisBook:
+      1. Código do MaisBook (Coluna I) — ou SGE caso a Coluna I esteja vazia
+      2. Exceção (fallback): Nome do formando (Coluna C), caso não encontre pelo código do MaisBook
+      3. Exceção (fallback): 2 primeiras palavras do nome (caso haja diferença de preposição no MaisBook)
+      4. Código SGE (Coluna E), caso ainda não tenha sido tentado
+    Em todas as etapas, continua comparando obrigatoriamente se TANTO o Nome QUANTO o Código batem.
+    """
+    candidatos = []
+    vistos = set()
+
+    def _adicionar(rotulo, valor):
+        v = str(valor or "").strip()
+        chave = normalizar(v)
+        if v and chave not in vistos:
+            vistos.add(chave)
+            candidatos.append((rotulo, v))
+
+    nome_completo = (pessoa.get("nome") or "").strip()
+    palavras_nome = [p for p in nome_completo.split() if len(p) > 2 and normalizar(p) not in IGNORAR_NO_NOME]
+    nome_curto = " ".join(palavras_nome[:2]) if len(palavras_nome) >= 2 else ""
+
+    if (pessoa.get("codigo") or "").strip():
+        _adicionar("código MaisBook", pessoa["codigo"])
+        _adicionar("nome", nome_completo)
+        if nome_curto and normalizar(nome_curto) != normalizar(nome_completo):
+            _adicionar("nome (2 primeiras palavras)", nome_curto)
+        _adicionar("código SGE", pessoa.get("sge"))
+    else:
+        _adicionar("código SGE", pessoa.get("sge"))
+        _adicionar("nome", nome_completo)
+        if nome_curto and normalizar(nome_curto) != normalizar(nome_completo):
+            _adicionar("nome (2 primeiras palavras)", nome_curto)
+    return candidatos
 
 
 JS_LISTAR_CARTOES = r"""
@@ -1221,18 +1267,24 @@ JS_LISTAR_CARTOES = r"""
   return [...document.querySelectorAll('.clientes-grid-row[data-cliente-id]')].map(linha => {
     const principal = linha.querySelector('.clientes-grid-main') || linha;
     const celulas = [...principal.children].map(c => (c.innerText || '').trim());
-    const campo = (titulo, posicao) => {
-      const i = titulos.indexOf(titulo);
-      const valor = (i >= 0 && i < celulas.length ? celulas[i] : celulas[posicao]) || '';
+    const campo = (rotulos, posicao) => {
+      const lista = Array.isArray(rotulos) ? rotulos : [rotulos];
+      for (const t of lista) {
+        const i = titulos.indexOf(t);
+        if (i >= 0 && i < celulas.length && celulas[i]) {
+          return celulas[i].split('\n')[0].trim();
+        }
+      }
+      const valor = celulas[posicao] || '';
       return valor.split('\n')[0].trim();
     };
     return {
       id: linha.getAttribute('data-cliente-id'),
-      sge: campo('SGE', 0),
-      ctt: campo('CTT', 1),
-      nome: campo('NOME', 2),
-      codigo: campo('CODIGO', 3),
-      album: campo('ALBUM', 10),
+      sge: campo(['SGE', 'CODIGO SGE', 'COD. SGE'], 0),
+      ctt: campo(['CTT', 'CONTRATO', 'CONT'], 1),
+      nome: campo(['NOME', 'CLIENTE', 'ALUNO'], 2),
+      codigo: campo(['CODIGO', 'COD. ACESSO', 'COD ACESSO', 'COD'], 3),
+      album: campo(['ALBUM', 'STATUS ALBUM'], 10),
     };
   });
 }
@@ -1243,16 +1295,88 @@ def descrever_cartao(cartao):
     return f"{cartao['nome']} (SGE {cartao['sge']}, CTT {cartao['ctt']}, código {cartao['codigo']})"
 
 
-def cartao_e_da_pessoa(pessoa, cartao):
-    if not capa_e_da_pessoa(pessoa["nome"], cartao["nome"]):
+def nome_cartao_bate(nome_planilha, nome_cartao):
+    """Confere se o nome na planilha e o nome no cartão/modal do MaisBook pertencem à mesma pessoa."""
+    if not str(nome_planilha or "").strip() or not str(nome_cartao or "").strip():
         return False
-    if pessoa.get("contrato"):
-        return so_contrato(cartao["ctt"]) == pessoa["contrato"]
-    return cartao["sge"].strip() == pessoa["sge"]
+    if capa_e_da_pessoa(nome_planilha, nome_cartao):
+        return True
+    palavras_plan = [
+        p for p in normalizar(nome_planilha).split()
+        if len(p) > 2 and p not in IGNORAR_NO_NOME
+    ]
+    palavras_cart = [
+        p for p in normalizar(nome_cartao).split()
+        if len(p) > 2 and p not in IGNORAR_NO_NOME
+    ]
+    if not palavras_plan or not palavras_cart:
+        return False
+    if nomes_batem(nome_planilha, nome_cartao):
+        set_plan, set_cart = set(palavras_plan), set(palavras_cart)
+        if set_plan <= set_cart or set_cart <= set_plan:
+            return True
+    return False
 
 
-def achar_cliente(pagina, pessoa):
-    limite = time.time() + 20
+def codigo_cartao_bate(pessoa, cartao):
+    """
+    Compara se o código do formando na planilha (Código MaisBook da Coluna I ou SGE da Coluna E)
+    bate com o código do cartão no MaisBook (campo CODIGO ou campo SGE).
+    """
+    sge_plan = limpar_sge(pessoa.get("sge", ""))
+    cod_plan = normalizar_codigo_mb(pessoa.get("codigo", ""))
+    sge_cod_plan = limpar_sge(cod_plan) if cod_plan else ""
+
+    sge_cart = limpar_sge(cartao.get("sge", ""))
+    cod_cart = normalizar_codigo_mb(cartao.get("codigo", ""))
+    sge_cod_cart = limpar_sge(cod_cart) if cod_cart else ""
+
+    # 1. Compara pelo Código do MaisBook (Coluna I) se preenchido na planilha
+    if cod_plan:
+        if cod_cart and cod_cart == cod_plan:
+            return True
+        if sge_cod_plan and sge_cart and sge_cart == sge_cod_plan:
+            return True
+        if sge_cod_plan and sge_cod_cart and sge_cod_cart == sge_cod_plan:
+            return True
+
+    # 2. Compara pelo Código SGE (Coluna E)
+    if sge_plan:
+        if sge_cart and sge_cart == sge_plan:
+            return True
+        if cod_cart and (cod_cart == sge_plan.upper() or sge_cod_cart == sge_plan):
+            return True
+
+    return False
+
+
+def cartao_e_da_pessoa(pessoa, cartao):
+    """
+    Valida obrigatoriamente que TANTO o Nome QUANTO o Código (MaisBook ou SGE) batem no cartão.
+    Mesmo quando a busca é feita pelo nome (exceção), exige que o nome e o código batam.
+    """
+    if not nome_cartao_bate(pessoa.get("nome", ""), cartao.get("nome", "")):
+        return False
+    if not codigo_cartao_bate(pessoa, cartao):
+        return False
+    return True
+
+
+def _filtrar_cartoes_da_pessoa(pessoa, cartoes):
+    certos = [c for c in cartoes if cartao_e_da_pessoa(pessoa, c)]
+    # Se o mesmo aluno (mesmo nome + mesmo código) tiver mais de um cartão por contratos distintos, desempata pelo contrato
+    if len(certos) > 1 and pessoa.get("contrato"):
+        por_contrato = [
+            c for c in certos
+            if so_contrato(c.get("ctt")) == pessoa["contrato"]
+        ]
+        if por_contrato:
+            certos = por_contrato
+    return certos
+
+
+def _aguardar_cartoes_na_tela(pagina, timeout_s=20):
+    limite = time.time() + timeout_s
     cartoes = []
     vazio_desde = None
     while time.time() < limite:
@@ -1267,21 +1391,74 @@ def achar_cliente(pagina, pessoa):
         else:
             vazio_desde = None
         time.sleep(0.5)
-    if not cartoes:
-        raise PararPessoa("não encontrado", f"MaisBook: nenhum cliente na pesquisa por {termo_busca(pessoa)}")
+    return cartoes
 
-    certos = [c for c in cartoes if cartao_e_da_pessoa(pessoa, c)]
-    outros = [c for c in cartoes if c not in certos]
-    if len(cartoes) > 1:
-        for cartao in cartoes:
+
+def achar_cliente(pagina, pessoa):
+    termo_atual = termo_busca(pessoa)
+    cartoes = _aguardar_cartoes_na_tela(pagina)
+    todos_cartoes_vistos = list(cartoes)
+    certos = _filtrar_cartoes_da_pessoa(pessoa, cartoes)
+
+    # EXCEÇÃO: Caso não encontre pelo código do MaisBook (ou termo inicial), procura pelo nome
+    # (e demais candidatos), mas continua comparando obrigatoriamente se o NOME e o CÓDIGO batem!
+    if not certos:
+        candidatos = termos_busca_candidatos(pessoa)
+        ja_tentados = {normalizar(termo_atual)}
+        for rotulo_cand, termo_cand in candidatos:
+            chave_cand = normalizar(termo_cand)
+            if not chave_cand or chave_cand in ja_tentados:
+                continue
+            ja_tentados.add(chave_cand)
+            print(
+                f"    exceção MaisBook: não encontrado por '{termo_atual}' — "
+                f"procurando por {rotulo_cand} '{termo_cand}' (comparando nome + código)..."
+            )
+            ir_clientes(pagina, termo_cand)
+            cartoes_cand = _aguardar_cartoes_na_tela(pagina)
+            for c in cartoes_cand:
+                if not any(v.get("id") == c.get("id") for v in todos_cartoes_vistos):
+                    todos_cartoes_vistos.append(c)
+            certos = _filtrar_cartoes_da_pessoa(pessoa, cartoes_cand)
+            if certos:
+                cartoes = cartoes_cand
+                pessoa["termo_busca_efetivo"] = termo_cand
+                aviso_fb = (
+                    f"exceção MaisBook: não achou pelo código '{termo_atual}', "
+                    f"encontrado por {rotulo_cand} (nome + código conferidos)"
+                )
+                if aviso_fb not in pessoa.setdefault("avisos", []):
+                    pessoa["avisos"].append(aviso_fb)
+                print(
+                    f"    encontrado por {rotulo_cand} ('{termo_cand}') — "
+                    f"nome e código batem: {descrever_cartao(certos[0])}"
+                )
+                break
+
+    if len(todos_cartoes_vistos) > 1:
+        for cartao in todos_cartoes_vistos:
             descricao = descrever_cartao(cartao)
             if descricao not in pessoa.setdefault("duplicados", []):
                 pessoa["duplicados"].append(descricao)
-    if not certos:
-        achados = "; ".join(descrever_cartao(c) for c in outros[:3])
+
+    if not todos_cartoes_vistos:
+        cod_desc = pessoa.get("codigo") or pessoa.get("sge")
         raise PararPessoa(
             "não encontrado",
-            f"MaisBook: nenhum cartão com o nome e o contrato {pessoa.get('contrato') or pessoa['sge']} — achei: {achados}",
+            f"MaisBook: nenhum cliente na pesquisa pelo código '{cod_desc}' nem pelo nome '{pessoa.get('nome')}'",
+        )
+
+    if not certos:
+        outros = [c for c in todos_cartoes_vistos if c not in certos]
+        achados = "; ".join(descrever_cartao(c) for c in outros[:3])
+        cod_esperado = (
+            f"código {pessoa['codigo']} / SGE {pessoa['sge']}"
+            if pessoa.get("codigo")
+            else f"SGE {pessoa['sge']}"
+        )
+        raise PararPessoa(
+            "não encontrado",
+            f"MaisBook: nenhum cartão onde o nome ('{pessoa.get('nome')}') e o código ({cod_esperado}) batam — achei: {achados}",
         )
     if len(certos) > 1:
         raise PararPessoa(
@@ -1292,8 +1469,11 @@ def achar_cliente(pagina, pessoa):
     cliente_id = certos[0]["id"]
     if certos[0].get("sge"):
         pessoa["sge_maisbook"] = certos[0]["sge"].strip()
+    if certos[0].get("codigo"):
+        pessoa["codigo_maisbook"] = certos[0]["codigo"].strip()
     if certos[0].get("album"):
         pessoa["album_maisbook"] = certos[0]["album"].strip()
+    pessoa["codigo_cartao_confirmado"] = True
     linha = pagina.locator(f'.clientes-grid-row[data-cliente-id="{cliente_id}"]')
     linha.first.wait_for(state="visible", timeout=15000)
     return cliente_id, linha.first
@@ -1826,14 +2006,18 @@ def abrir_edicao(pagina, pessoa):
     campo_nome = pagina.locator("#cliente_nome")
     limite = time.time() + 15
     confirmado = False
+    sge_modal_ultimo, nome_modal_ultimo = "", ""
     while time.time() < limite:
-        sge_modal = (campo_sge.input_value() or "").strip()
+        sge_modal = (campo_sge.input_value() or "").strip() if campo_sge.count() else ""
         nome_modal = (campo_nome.input_value() or "").strip() if campo_nome.count() else ""
-        if (
-            sge_modal == pessoa["sge"]
-            or (pessoa.get("sge_maisbook") and sge_modal == pessoa["sge_maisbook"])
-            or (nome_modal and nomes_batem(pessoa["nome"], nome_modal))
-        ):
+        sge_modal_ultimo, nome_modal_ultimo = sge_modal, nome_modal
+        nome_ok = bool(nome_modal) and nome_cartao_bate(pessoa["nome"], nome_modal)
+        cartao_modal = {
+            "sge": sge_modal or pessoa.get("sge_maisbook", ""),
+            "codigo": pessoa.get("codigo_maisbook", ""),
+        }
+        codigo_ok = codigo_cartao_bate(pessoa, cartao_modal)
+        if nome_ok and codigo_ok:
             if sge_modal and sge_modal != pessoa["sge"]:
                 pessoa["sge_maisbook"] = sge_modal
             confirmado = True
@@ -1841,7 +2025,10 @@ def abrir_edicao(pagina, pessoa):
         time.sleep(0.3)
     if not confirmado:
         fechar_edicao(pagina)
-        raise PararPessoa("erro no e-mail", "o Editar abriu outro cliente — link não colado")
+        raise PararPessoa(
+            "erro no e-mail",
+            f"o Editar abriu outro cliente (nome='{nome_modal_ultimo}', código='{sge_modal_ultimo}') — nome e código precisam bater",
+        )
     return modal
 
 
