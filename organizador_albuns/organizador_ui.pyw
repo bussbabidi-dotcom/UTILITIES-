@@ -827,6 +827,11 @@ class JanelaOrganizador:
         self.btn_dash_conferir_srv.pack(side="left", padx=(0, 6))
         ttk.Button(
             bloco_mb,
+            text="📊 Diagnóstico Elegibilidade",
+            command=self._dash_diagnosticar_elegibilidade_lote,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            bloco_mb,
             text="📂 Pasta Servidor...",
             command=self._escolher_origem_dashboard,
         ).pack(side="left")
@@ -1182,50 +1187,62 @@ class JanelaOrganizador:
             if nome_aba_lida not in wb.sheetnames:
                 nome_aba_lida = "GERAL ENVIOS" if "GERAL ENVIOS" in wb.sheetnames else wb.sheetnames[0]
             ws = wb[nome_aba_lida]
-
             linhas_brutas = list(ws.iter_rows(values_only=True))
-            wb.close()
 
-            # Localiza a linha de cabeçalho (procura NOME, SGE, TAMANHO, STATUS)
-            linha_cab = 1
-            col_map = {
-                "nome": 3,      # C
-                "contrato": 4,  # D
-                "sge": 5,       # E
-                "tamanho": 6,   # F
-                "curso": 7,     # G
-                "cpf": 8,       # H
-                "maisbook": 9,  # I
-                "status": 11,   # K
-                "lote": 12,     # L
-                "capa": 13,     # M
-            }
-            for idx_l, valores in enumerate(linhas_brutas[:35], start=1):
-                textos = [normalizar_txt(v) for v in valores]
-                if "sge" in textos and "status" in textos:
-                    linha_cab = idx_l
-                    for i_c, t_c in enumerate(textos, start=1):
-                        if t_c in ("nome", "nome completo", "cliente", "aluno", "formando"):
-                            col_map["nome"] = i_c
-                        elif t_c in ("cont", "contrato", "ctt"):
-                            col_map["contrato"] = i_c
-                        elif t_c == "sge":
-                            col_map["sge"] = i_c
-                        elif t_c == "tamanho":
-                            col_map["tamanho"] = i_c
-                        elif t_c == "curso":
-                            col_map["curso"] = i_c
-                        elif t_c == "cpf":
-                            col_map["cpf"] = i_c
-                        elif t_c == "maisbook":
-                            col_map["maisbook"] = i_c
-                        elif t_c == "status":
-                            col_map["status"] = i_c
-                        elif t_c == "lote":
-                            col_map["lote"] = i_c
-                        elif t_c == "capa" and i_c > col_map.get("status", 10):
-                            col_map["capa"] = i_c
-                    break
+            def _achar_cabecalho(linhas):
+                cmap = {
+                    "nome": 3,      # C
+                    "contrato": 4,  # D
+                    "sge": 5,       # E
+                    "tamanho": 6,   # F
+                    "curso": 7,     # G
+                    "cpf": 8,       # H
+                    "maisbook": 9,  # I
+                    "status": 11,   # K
+                    "lote": 12,     # L
+                    "capa": 13,     # M
+                }
+                for idx_l, valores in enumerate(linhas[:35], start=1):
+                    textos = [normalizar_txt(v) for v in valores]
+                    if "sge" in textos and "status" in textos:
+                        for i_c, t_c in enumerate(textos, start=1):
+                            if t_c in ("nome", "nome completo", "cliente", "aluno", "formando"):
+                                cmap["nome"] = i_c
+                            elif t_c in ("cont", "contrato", "ctt"):
+                                cmap["contrato"] = i_c
+                            elif t_c == "sge":
+                                cmap["sge"] = i_c
+                            elif t_c == "tamanho":
+                                cmap["tamanho"] = i_c
+                            elif t_c == "curso":
+                                cmap["curso"] = i_c
+                            elif t_c == "cpf":
+                                cmap["cpf"] = i_c
+                            elif t_c == "maisbook":
+                                cmap["maisbook"] = i_c
+                            elif t_c == "status":
+                                cmap["status"] = i_c
+                            elif t_c == "lote":
+                                cmap["lote"] = i_c
+                            elif t_c == "capa" and i_c > cmap.get("status", 10):
+                                cmap["capa"] = i_c
+                        return idx_l, cmap
+                return None, cmap
+
+            linha_cab, col_map = _achar_cabecalho(linhas_brutas)
+            if linha_cab is None:
+                for cand_aba in (["GERAL ENVIOS"] + list(wb.sheetnames)):
+                    if cand_aba in wb.sheetnames and cand_aba != nome_aba_lida:
+                        cand_linhas = list(wb[cand_aba].iter_rows(values_only=True))
+                        lc, cm = _achar_cabecalho(cand_linhas)
+                        if lc is not None:
+                            nome_aba_lida = cand_aba
+                            linhas_brutas = cand_linhas
+                            linha_cab, col_map = lc, cm
+                            break
+            if linha_cab is None:
+                linha_cab = 18
+            wb.close()
 
             def pegar_cel(row_vals, idx_1based):
                 if idx_1based < 1 or idx_1based > len(row_vals):
@@ -1653,7 +1670,7 @@ class JanelaOrganizador:
         )
         if aluno["etapa_k"] in ETAPAS_COLUNA_K:
             self.dash_novo_status_k.set(aluno["etapa_k"])
-        self.envio_sge.set(aluno["sge"])
+        # NÃO sobrescreve self.envio_sge ao clicar na tabela para não travar o Envio em Lote em apenas 1 aluno!
         if not self.celula_ativa or self.celula_ativa[0] != int(aluno["linha"]):
             self._selecionar_celula_planilha(int(aluno["linha"]), "nome")
 
@@ -2564,12 +2581,199 @@ class JanelaOrganizador:
 
         ttk.Button(rodape, text="Fechar", command=janela.destroy).pack(side="right")
 
+    def _dash_diagnosticar_elegibilidade_lote(self):
+        """
+        Calcula e exibe o diagnóstico completo de elegibilidade para o envio em lote,
+        detalhando cada critério de filtragem aplicado ao conjunto de dados atual:
+          - Filtro 1: Status Incorreto na Coluna K (!= DIAGRAMADO)
+          - Filtro 2: Já enviado anteriormente (envio_aprovacao_feitos.json)
+          - Filtro 3: Capa Nula / Vazia na Coluna M (CAPA)
+          - Filtro 4: Conferência Servidor Pendente ou Incompleta (Falta Capa / Falta Álbum)
+          - Resultado Final: Pessoas Elegíveis Confirmadas
+        """
+        alunos = list(self.alunos_dashboard)
+        total = len(alunos)
+        sge_filtro_aba = self.envio_sge.get().strip()
+        exigir_col_m = bool(self.envio_exigir_coluna_m.get())
+
+        feitos = {}
+        arq_feitos = PASTA / "envio_aprovacao_feitos.json"
+        if arq_feitos.is_file():
+            try:
+                feitos = json.loads(arq_feitos.read_text(encoding="utf-8"))
+            except Exception:
+                feitos = {}
+
+        contagem_status = {}
+        diagramados = []
+        reprovados_status = 0
+        for a in alunos:
+            st = a.get("etapa_k") or a.get("status_k") or "(vazio)"
+            contagem_status[st] = contagem_status.get(st, 0) + 1
+            if a.get("etapa_k") == "DIAGRAMADO":
+                diagramados.append(a)
+            else:
+                reprovados_status += 1
+
+        ja_enviados = [a for a in diagramados if str(a["sge"]) in feitos]
+        nao_enviados = [a for a in diagramados if str(a["sge"]) not in feitos]
+
+        capa_nula = [a for a in nao_enviados if exigir_col_m and not a.get("liberado_m")]
+        liberados_planilha = [a for a in nao_enviados if (not exigir_col_m) or a.get("liberado_m")]
+
+        elegiveis_srv_ok = []
+        pendentes_conferencia_srv = []
+        bloq_falta_capa_srv = []
+        bloq_falta_album_srv = []
+        bloq_sem_arquivos_srv = []
+
+        for a in liberados_planilha:
+            det = self.detalhe_servidor_por_sge.get(str(a["sge"]))
+            if not det:
+                pendentes_conferencia_srv.append(a)
+            elif det.get("completo"):
+                elegiveis_srv_ok.append((a, det))
+            elif det.get("temAlbum") and not det.get("temCapa"):
+                bloq_falta_capa_srv.append((a, det))
+            elif det.get("temCapa") and not det.get("temAlbum"):
+                bloq_falta_album_srv.append((a, det))
+            else:
+                bloq_sem_arquivos_srv.append((a, det))
+
+        linhas_diag = [
+            "=" * 82,
+            "DIAGNÓSTICO DE ELEGIBILIDADE — ENVIO EM LOTE MAISBOOK (CRITÉRIOS DE FILTRAGEM)",
+            "=" * 82,
+            f"Aba Analisada            : {self.aba.get().strip() or ABA_PADRAO}",
+            f"Pasta do Servidor        : {self.origem.get().strip() or ORIGEM_PADRAO}",
+            f"Trava Coluna M (CAPA)    : {'ATIVA (Exige OK na Coluna M)' if exigir_col_m else 'DESATIVADA (--ignorar-coluna-m)'}",
+            f"Filtro SGE Individual    : {sge_filtro_aba or '(Nenhum — Lote Completo)'}",
+            "-" * 82,
+            f"[0] Total de registros carregados da planilha .....................: {total}",
+            f"[1] Reprovados por Status Incorreto (Coluna K != DIAGRAMADO) ......: -{reprovados_status}",
+        ]
+        for st_k, qtd_k in sorted(contagem_status.items(), key=lambda x: -x[1]):
+            tag_k = "✔ ELEGÍVEL COL. K" if st_k == "DIAGRAMADO" else "✖ Ignorado no lote"
+            linhas_diag.append(f"      • {st_k:<24}: {qtd_k:>4} formando(s) [{tag_k}]")
+
+        linhas_diag += [
+            f"    -> Aprovados no Filtro 1 (Coluna K = DIAGRAMADO) ..............: {len(diagramados)}",
+            f"[2] Reprovados por Já Constarem Enviados (feitos.json) ............: -{len(ja_enviados)}",
+            f"[3] Reprovados por Capa Nula/Vazia na Coluna M (CAPA) .............: -{len(capa_nula)}",
+            f"    -> Prontos na Planilha (Coluna K = DIAGRAMADO + Coluna M OK) ..: {len(liberados_planilha)}",
+            f"[4] Critério de Conferência Física no Servidor (Álbum JPG + Capa):",
+            f"      • ✔ Elegíveis Confirmados (Álbum + Capa OK no Servidor) .....: {len(elegiveis_srv_ok)}",
+            f"      • ⏳ Conferência Servidor Pendente (Ainda não conferidos) ....: {len(pendentes_conferencia_srv)}",
+            f"      • ⚠ Bloqueados: Falta Capa no Servidor (Só tem Álbum) .......: -{len(bloq_falta_capa_srv)}",
+            f"      • ⚠ Bloqueados: Falta Álbum / Lâminas Incompletas ...........: -{len(bloq_falta_album_srv)}",
+            f"      • ✖ Bloqueados: Sem Álbum e Sem Capa no Servidor ............: -{len(bloq_sem_arquivos_srv)}",
+            "-" * 82,
+            f"RESULTADO: {len(elegiveis_srv_ok)} confirmado(s) no servidor | {len(pendentes_conferencia_srv)} aguardando conferência do servidor",
+            "=" * 82,
+            "",
+            "DETALHAMENTO INDIVIDUAL DOS FORMANDOS COM STATUS = DIAGRAMADO:",
+        ]
+
+        for a in diagramados:
+            sge_s = str(a["sge"])
+            det = self.detalhe_servidor_por_sge.get(sge_s)
+            if sge_s in feitos:
+                crit = "✖ BLOQUEADO [JÁ ENVIADO EM FEITOS.JSON]"
+            elif exigir_col_m and not a.get("liberado_m"):
+                crit = f"✖ BLOQUEADO [CAPA NULA NA COL. M: '{a.get('capa_m') or '(vazia)'}']"
+            elif not det:
+                crit = "⏳ PENDENTE [CONFERÊNCIA SERVIDOR PENDENTE — Clique em Conferir Servidor]"
+            elif det.get("completo"):
+                crit = f"✔ ELEGÍVEL CONFIRMADO [{det.get('resumoAlbum')} | {det.get('resumoCapa')}]"
+            elif det.get("temAlbum") and not det.get("temCapa"):
+                crit = f"✖ BLOQUEADO SERVIDOR [FALTA CAPA: {det.get('resumoAlbum')} | {det.get('resumoCapa')}]"
+            elif det.get("temCapa") and not det.get("temAlbum"):
+                crit = f"✖ BLOQUEADO SERVIDOR [FALTA ÁLBUM: {det.get('resumoAlbum')} | {det.get('resumoCapa')}]"
+            else:
+                crit = f"✖ BLOQUEADO SERVIDOR [SEM ÁLBUM E SEM CAPA: {det.get('resumoGeral')}]"
+            linhas_diag.append(
+                f"  Linha {a['linha']:>3} | SGE {sge_s:<6} | {a['nome']:<34} | Col.M={a.get('capa_m') or '(vazia)':<10} -> {crit}"
+            )
+
+        texto_completo = "\n".join(linhas_diag) + "\n"
+        self._escrever("\n" + texto_completo)
+
+        janela = tk.Toplevel(self.root)
+        janela.title("Diagnóstico de Elegibilidade — Envio em Lote MaisBook")
+        janela.geometry("880x620")
+        janela.configure(bg=CARTAO)
+        janela.transient(self.root)
+        janela.grab_set()
+
+        topo = tk.Frame(janela, bg=VERDE_FORTE, padx=14, pady=10)
+        topo.pack(fill="x")
+        tk.Label(
+            topo,
+            text="📊 Diagnóstico de Elegibilidade — Por que o lote tem ou não pessoas elegíveis?",
+            bg=VERDE_FORTE,
+            fg="#FFFFFF",
+            font=FONTE_TITULO,
+        ).pack(anchor="w")
+        tk.Label(
+            topo,
+            text=f"Total Planilha: {total} | DIAGRAMADO (Col. K): {len(diagramados)} | Capa Nula (Col. M): {len(capa_nula)} | "
+                 f"Prontos Planilha: {len(liberados_planilha)} | Confirmados Servidor: {len(elegiveis_srv_ok)}",
+            bg=VERDE_FORTE,
+            fg="#DBEAFE",
+            font=FONTE_NEGRITO,
+        ).pack(anchor="w", pady=(2, 0))
+
+        corpo = ttk.Frame(janela, padding=12, style="Card.TFrame")
+        corpo.pack(fill="both", expand=True)
+        corpo.columnconfigure(0, weight=1)
+        corpo.rowconfigure(0, weight=1)
+
+        caixa = scrolledtext.ScrolledText(corpo, font=("Consolas", 9), bg="#0F172A", fg="#F8FAFC")
+        caixa.grid(row=0, column=0, sticky="nsew")
+        caixa.insert("1.0", texto_completo)
+        caixa.configure(state="disabled")
+
+        rodape = tk.Frame(janela, bg=CARTAO, padx=12, pady=10)
+        rodape.pack(fill="x")
+
+        if sge_filtro_aba:
+            def _limpar_sge_preso():
+                self.envio_sge.set("")
+                janela.destroy()
+                self._dash_diagnosticar_elegibilidade_lote()
+
+            ttk.Button(
+                rodape,
+                text=f"🧹 Limpar Filtro SGE Preso ({sge_filtro_aba})",
+                style="Aviso.TButton",
+                command=_limpar_sge_preso,
+            ).pack(side="left", padx=(0, 8))
+
+        def _conferir_agora():
+            janela.destroy()
+            self.dash_filtro_status.set("DIAGRAMADO")
+            self._ao_mudar_combo_status()
+            self._conferir_todos_no_servidor()
+
+        ttk.Button(
+            rodape,
+            text="🔍 Conferir Diagramados no Servidor Agora",
+            style="Primario.TButton",
+            command=_conferir_agora,
+        ).pack(side="left", padx=(0, 8))
+
+        ttk.Button(rodape, text="Fechar", command=janela.destroy).pack(side="right")
+
     def _dash_enviar_prontos_lote(self):
         if self.processo:
             messagebox.showinfo("Robô em execução", "Já existe uma operação em andamento. Aguarde ou clique em Parar.")
             return
+        self.envio_sge.set("")
         prontos = [a for a in self.alunos_dashboard if a["etapa_k"] == "DIAGRAMADO" and a["liberado_m"]]
         retidos = [a for a in self.alunos_dashboard if a["etapa_k"] == "DIAGRAMADO" and not a["liberado_m"]]
+        if not prontos:
+            self._dash_diagnosticar_elegibilidade_lote()
+            return
         if not messagebox.askyesno(
             "Disparo em Lote — Envio de Aprovação (MaisBook)",
             f"Prontos com STATUS = DIAGRAMADO e OK na Coluna M (CAPA): {len(prontos)} formando(s)\n"
@@ -2581,7 +2785,6 @@ class JanelaOrganizador:
             "Iniciar envio em lote agora?",
         ):
             return
-        self.envio_sge.set("")
         argumentos = self._envio_argumentos()
         if argumentos is None:
             return
