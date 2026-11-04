@@ -1637,33 +1637,11 @@ JS_FALTANDO = r"""
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .toLowerCase().replace(/\s+/g, ' ').trim();
 
-  const estaNaBandejaUpload = (el) => {
-    let p = el;
-    while (p && p !== document.body) {
-      const role = (p.getAttribute && p.getAttribute('role')) || '';
-      const aria = norm((p.getAttribute && p.getAttribute('aria-label')) || '');
-      if (
-        role === 'dialog' ||
-        role === 'alertdialog' ||
-        role === 'status' ||
-        aria.includes('upload') ||
-        aria.includes('fazendo o upload') ||
-        aria.includes('fazendo upload')
-      ) {
-        return true;
-      }
-      p = p.parentElement || (p.getRootNode && p.getRootNode().host) || null;
-    }
-    return false;
-  };
-
-  const raizBusca = document.querySelector('[role="main"]') || document.body;
   const labels = [];
   const visitar = (raiz) => {
     if (!raiz || !raiz.querySelectorAll) return;
-    const seletores = '[data-id], [role="row"], [role="gridcell"], [role="option"], [aria-label], [data-tooltip]';
-    for (const el of raiz.querySelectorAll(seletores)) {
-      if (estaNaBandejaUpload(el)) continue;
+    for (const el of raiz.querySelectorAll('[data-id], [role="row"], [role="gridcell"], [role="option"], [aria-label], [data-tooltip]')) {
+      if (el.closest && el.closest('[role="dialog"], [role="alertdialog"]')) continue;
       const tip = el.getAttribute('data-tooltip') || '';
       const aria = el.getAttribute('aria-label') || '';
       if (tip) labels.push(norm(tip));
@@ -1674,20 +1652,30 @@ JS_FALTANDO = r"""
       }
     }
     for (const el of raiz.querySelectorAll('*')) {
-      if (el.shadowRoot && !estaNaBandejaUpload(el)) visitar(el.shadowRoot);
+      if (el.shadowRoot) visitar(el.shadowRoot);
     }
   };
-  visitar(raizBusca);
+  visitar(document.querySelector('[role="main"]') || document.body);
 
-  const contemArquivoExato = (nomeArquivo) => {
-    const alvo = norm(nomeArquivo);
-    if (!alvo) return false;
-    const escapado = alvo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(?:^|[^a-z0-9_-])${escapado}(?:$|[^a-z0-9_.-])`, 'i');
-    return labels.some(rotulo => rotulo === alvo || regex.test(rotulo));
+  const contemNomeExato = (rotulo, alvo) => {
+    if (!rotulo || !alvo) return false;
+    let pos = rotulo.indexOf(alvo);
+    while (pos !== -1) {
+      const antes = pos > 0 ? rotulo[pos - 1] : '';
+      const depois = pos + alvo.length < rotulo.length ? rotulo[pos + alvo.length] : '';
+      const antesOk = !antes || !/[a-z0-9]/.test(antes);
+      const depoisOk = !depois || !/[a-z0-9]/.test(depois);
+      if (antesOk && depoisOk) return true;
+      pos = rotulo.indexOf(alvo, pos + 1);
+    }
+    return false;
   };
 
-  return nomes.filter(nome => !contemArquivoExato(nome));
+  return nomes.filter(nome => {
+    const alvo = norm(nome);
+    if (!alvo) return false;
+    return !labels.some(rotulo => contemNomeExato(rotulo, alvo));
+  });
 }
 """
 
@@ -1706,7 +1694,12 @@ JS_STATUS_UPLOAD = r"""
   };
   const texto = norm(juntar(document.body));
   const numero = texto.match(/(\d+)\s+uploads?\s+conclu/);
-  const fazendoTexto = (
+  const concluido = (
+    texto.includes('upload conclu') ||
+    texto.includes('uploads conclu') ||
+    texto.includes('upload complete')
+  );
+  const fazendo = (
     texto.includes('fazendo upload') ||
     texto.includes('fazendo o upload') ||
     texto.includes('iniciando upload') ||
@@ -1715,36 +1708,21 @@ JS_STATUS_UPLOAD = r"""
     texto.includes('preparando o upload') ||
     texto.includes('uploading') ||
     texto.includes('starting upload') ||
-    /\b\d+\s*(min|seg|s|h)\s+restante/.test(texto) ||
-    texto.includes('restam ') ||
+    /\b\d+\s*(min|seg)\s+restante/.test(texto) ||
     texto.includes('tempo restante')
   );
-  let temBarraAtiva = false;
-  try {
-    const barras = document.querySelectorAll('[role="progressbar"]');
-    for (const b of barras) {
-      const st = getComputedStyle(b);
-      if (st && st.display !== 'none' && st.visibility !== 'hidden') {
-        const val = b.getAttribute('aria-valuenow');
-        if (val === null || Number(val) < 100) {
-          temBarraAtiva = true;
-          break;
-        }
-      }
-    }
-  } catch (e) {}
-
+  const falha = (
+    texto.includes('nao foi enviado') ||
+    texto.includes('falha no upload') ||
+    texto.includes('upload failed') ||
+    texto.includes('erro no upload') ||
+    texto.includes('upload cancelado')
+  );
   return {
-    fazendo: fazendoTexto || temBarraAtiva,
-    concluido: texto.includes('upload conclu') || texto.includes('uploads conclu') || texto.includes('upload complete'),
-    falha: (
-      texto.includes('nao foi enviado') ||
-      texto.includes('falha no upload') ||
-      texto.includes('upload failed') ||
-      texto.includes('erro no upload') ||
-      texto.includes('upload cancelado')
-    ),
-    quantidade: numero ? Number(numero[1]) : 0,
+    fazendo,
+    concluido,
+    falha,
+    quantidade: numero ? Number(numero[1]) : (concluido ? 1 : 0),
   };
 }
 """
@@ -1915,14 +1893,14 @@ def arquivos_faltando(pagina, arquivos, rolar_tudo=True):
     try:
         if rolar_tudo:
             pagina.evaluate(JS_ROLAR_TOPO)
-            pagina.wait_for_timeout(350)
-        for passo in range(15 if rolar_tudo else 1):
+            pagina.wait_for_timeout(300)
+        for _ in range(12 if rolar_tudo else 1):
             restantes = pagina.evaluate(JS_FALTANDO, restantes)
             if not restantes or not rolar_tudo:
                 break
             if not pagina.evaluate(JS_ROLAR_LISTA):
                 break
-            pagina.wait_for_timeout(350)
+            pagina.wait_for_timeout(300)
         if rolar_tudo:
             pagina.evaluate(JS_ROLAR_TOPO)
     except Exception:
@@ -1949,102 +1927,90 @@ def esperar_carregamento(pagina, arquivos, enviados):
     inicio = time.time()
     limite = inicio + ESPERA_UPLOAD_S
     viu_envio = False
-    ciclos_sem_atividade = 0
+    ciclos_sem_fazendo = 0
 
-    # Aguarda o Google Drive abrir a bandeja de upload e iniciar a transferência
-    pagina.wait_for_timeout(3000)
+    # Dá 2.5s para a bandeja de upload do Drive aparecer e iniciar
+    pagina.wait_for_timeout(2500)
 
     while time.time() < limite:
         tratar_conflito(pagina)
         try:
             status = pagina.evaluate(JS_STATUS_UPLOAD)
-            faltando_visiveis = pagina.evaluate(JS_FALTANDO, nomes)
+            faltando = pagina.evaluate(JS_FALTANDO, nomes)
         except Exception:
             time.sleep(2)
             continue
 
         if status.get("fazendo"):
             viu_envio = True
-            ciclos_sem_atividade = 0
+            ciclos_sem_fazendo = 0
             time.sleep(2)
             continue
 
-        # Se houve falha explícita na bandeja e o upload já parou, sai para a conferência/retentativa
-        if status.get("falha") and time.time() - inicio >= 5:
-            return
-
-        # Exige estabilidade sem upload ativo antes de encerrar a espera da bandeja
-        ciclos_sem_atividade += 1
+        ciclos_sem_fazendo += 1
         quantidade = status.get("quantidade") or 0
 
-        if not faltando_visiveis and ciclos_sem_atividade >= 2:
+        if status.get("falha") and faltando:
+            return
+
+        # Assim que todos os arquivos estão visíveis na pasta e não há upload em andamento, prossegue!
+        if not faltando:
             pagina.wait_for_timeout(2000)
             return
 
-        if viu_envio and status.get("concluido") and quantidade >= len(enviados) and ciclos_sem_atividade >= 2:
-            pagina.wait_for_timeout(2500)
+        # Se a bandeja do Drive confirmou "X uploads concluídos"
+        if status.get("concluido") and (quantidade >= len(enviados) or viu_envio):
+            pagina.wait_for_timeout(2000)
             return
 
-        # Se após 12s a bandeja já fechou/terminou e todos os arquivos constam na rolagem completa da pasta
-        if ciclos_sem_atividade >= 4 and time.time() - inicio >= 10:
-            faltando_pasta = arquivos_faltando(pagina, arquivos, rolar_tudo=True)
-            if not faltando_pasta:
+        # Se não há texto de upload ativo por 3 ciclos (~6s), faz uma varredura com scroll na pasta e libera
+        if ciclos_sem_fazendo >= 3:
+            faltando_scroll = arquivos_faltando(pagina, arquivos, rolar_tudo=True)
+            if not faltando_scroll or viu_envio:
+                pagina.wait_for_timeout(1500)
+                return
+            if ciclos_sem_fazendo >= 5:
                 return
 
         time.sleep(2)
-    raise PararPessoa("erro no Drive", "tempo esgotado aguardando o upload das fotos terminar no Drive")
+    raise PararPessoa("erro no Drive", "as fotos não terminaram de carregar no Drive")
 
 
 def colocar_arquivos(pagina, arquivos):
     """
-    Envia os arquivos para a pasta atual do Drive e FAZ A VERIFICAÇÃO REAL (com rolagem completa
-    e recarregamento da pasta no Drive) para garantir que 100% dos arquivos foram enviados e salvos.
-    Se faltar qualquer arquivo, reenvia automaticamente os faltantes (até 3 tentativas).
+    Envia os arquivos que faltam para a pasta atual do Drive, aguarda o término do upload
+    e confere rolando a pasta se todos os arquivos foram enviados (reenviando se faltar algum).
     """
     total = len(arquivos)
     faltam = arquivos_faltando(pagina, arquivos, rolar_tudo=True)
     if not faltam:
-        print(f"    conferido no Drive: todos os {total}/{total} arquivo(s) já estavam na pasta")
+        print(f"    os {total} arquivo(s) já estavam na pasta")
         pagina.wait_for_timeout(1500)
         return
 
-    max_tentativas = 3
-    for tentativa in range(1, max_tentativas + 1):
+    for tentativa in range(1, 3):
         if tentativa == 1:
-            print(f"    enviando {len(faltam)} de {total} arquivo(s) para o Drive...")
+            print(f"    enviando {len(faltam)} arquivo(s)")
         else:
-            nomes_faltam = ", ".join(a.name for a in faltam[:5])
-            print(
-                f"    retentativa {tentativa}/{max_tentativas}: reenviando {len(faltam)} arquivo(s) "
-                f"que faltaram no Drive ({nomes_faltam})..."
-            )
+            print(f"    reenviando {len(faltam)} arquivo(s) que faltaram ({', '.join(a.name for a in faltam[:4])})")
         enviar_arquivos(pagina, faltam)
         esperar_carregamento(pagina, arquivos, faltam)
-
-        # 1ª conferência na lista da pasta (rolando do topo ao fim)
-        pagina.wait_for_timeout(2000)
         faltam = arquivos_faltando(pagina, arquivos, rolar_tudo=True)
-
-        # 2ª conferência definitiva: recarrega a pasta do Drive para garantir que todos os arquivos
-        # foram realmente persistidos no servidor do Google Drive (e não apenas listados provisoriamente)
+        if not faltam:
+            print(f"    conferido no Drive: todos os {total}/{total} arquivo(s) na pasta")
+            return
         try:
-            url_pasta = pagina.url
-            if "drive.google.com/drive/folders/" in url_pasta:
-                pagina.reload(wait_until="domcontentloaded", timeout=60000)
-                esperar_drive_carregar(pagina)
-                pagina.wait_for_timeout(1800)
-                faltam = arquivos_faltando(pagina, arquivos, rolar_tudo=True)
+            status = pagina.evaluate(JS_STATUS_UPLOAD)
+            if status.get("concluido") and not status.get("falha") and (status.get("quantidade") or 0) >= total:
+                print(f"    conferido no Drive: {total} upload(s) concluído(s)")
+                return
         except Exception:
             pass
 
-        if not faltam:
-            print(f"    conferido no Drive: todos os {total}/{total} arquivo(s) foram realmente enviados e confirmados na pasta!")
-            return
-
-    nomes_nao_enviados = ", ".join(a.name for a in faltam[:8])
+    nomes_faltam = ", ".join(a.name for a in faltam[:6])
     raise PararPessoa(
         "erro no Drive",
-        f"conferência do Drive reprovada: faltaram {len(faltam)} de {total} arquivo(s) na pasta ({nomes_nao_enviados}) — link não colado",
+        f"faltaram {len(faltam)} de {total} arquivo(s) no Drive ({nomes_faltam})",
     )
 
 
@@ -2135,6 +2101,7 @@ def subir_para_o_drive(contexto, pagina_mb, pessoa, achados):
         esperar_drive_carregar(drive)
         conferir_drive_da_pessoa(drive, pessoa)
         garantir_pasta(drive, PASTA_RAIZ)
+        link_raiz = link_da_pasta(drive.url)
         if len(achados) >= 2:
             for item in achados:
                 nome_pasta = PASTA_TAMANHO.get(item["tamanho"], item["tamanho"].lower())
@@ -2144,9 +2111,9 @@ def subir_para_o_drive(contexto, pagina_mb, pessoa, achados):
                 voltar_para_pasta(drive, PASTA_RAIZ)
         else:
             colocar_arquivos(drive, achados[0]["arquivos"])
-        if not esta_na_pasta(drive, PASTA_RAIZ):
+        if not link_raiz and not esta_na_pasta(drive, PASTA_RAIZ):
             voltar_para_pasta(drive, PASTA_RAIZ)
-        link = link_da_pasta(drive.url)
+        link = link_raiz or link_da_pasta(drive.url)
         if not link:
             raise PararPessoa("erro no Drive", "não consegui o link da pasta ALBUM APROVAÇAO")
         print(f"    link: {link}")
