@@ -1593,6 +1593,22 @@ JS_MARCAR_PASTA = r"""
 }
 """
 
+JS_ROLAR_TOPO = r"""
+() => {
+  const visitar = (raiz) => {
+    if (!raiz || !raiz.querySelectorAll) return;
+    const todos = [raiz, ...raiz.querySelectorAll('*')];
+    for (const el of todos) {
+      if (el.shadowRoot) visitar(el.shadowRoot);
+      try {
+        if (el.scrollTop > 0) el.scrollTop = 0;
+      } catch (e) {}
+    }
+  };
+  visitar(document);
+}
+"""
+
 JS_ROLAR_LISTA = r"""
 () => {
   let rolou = false;
@@ -1617,17 +1633,61 @@ JS_ROLAR_LISTA = r"""
 
 JS_FALTANDO = r"""
 (nomes) => {
+  const norm = (s) => String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+
+  const estaNaBandejaUpload = (el) => {
+    let p = el;
+    while (p && p !== document.body) {
+      const role = (p.getAttribute && p.getAttribute('role')) || '';
+      const aria = norm((p.getAttribute && p.getAttribute('aria-label')) || '');
+      if (
+        role === 'dialog' ||
+        role === 'alertdialog' ||
+        role === 'status' ||
+        aria.includes('upload') ||
+        aria.includes('fazendo o upload') ||
+        aria.includes('fazendo upload')
+      ) {
+        return true;
+      }
+      p = p.parentElement || (p.getRootNode && p.getRootNode().host) || null;
+    }
+    return false;
+  };
+
+  const raizBusca = document.querySelector('[role="main"]') || document.body;
   const labels = [];
   const visitar = (raiz) => {
     if (!raiz || !raiz.querySelectorAll) return;
-    for (const el of raiz.querySelectorAll('[aria-label], [data-tooltip]')) {
-      labels.push(el.getAttribute('data-tooltip') || el.getAttribute('aria-label') || '');
+    const seletores = '[data-id], [role="row"], [role="gridcell"], [role="option"], [aria-label], [data-tooltip]';
+    for (const el of raiz.querySelectorAll(seletores)) {
+      if (estaNaBandejaUpload(el)) continue;
+      const tip = el.getAttribute('data-tooltip') || '';
+      const aria = el.getAttribute('aria-label') || '';
+      if (tip) labels.push(norm(tip));
+      if (aria) labels.push(norm(aria));
+      if (el.getAttribute('data-id') || el.getAttribute('role') === 'row' || el.getAttribute('role') === 'gridcell') {
+        const txt = (el.innerText || '').split('\n')[0].trim();
+        if (txt) labels.push(norm(txt));
+      }
     }
-    for (const el of raiz.querySelectorAll('*')) if (el.shadowRoot) visitar(el.shadowRoot);
+    for (const el of raiz.querySelectorAll('*')) {
+      if (el.shadowRoot && !estaNaBandejaUpload(el)) visitar(el.shadowRoot);
+    }
   };
-  visitar(document);
-  const texto = labels.join('\n').toLowerCase();
-  return nomes.filter(nome => !texto.includes(String(nome).toLowerCase()));
+  visitar(raizBusca);
+
+  const contemArquivoExato = (nomeArquivo) => {
+    const alvo = norm(nomeArquivo);
+    if (!alvo) return false;
+    const escapado = alvo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?:^|[^a-z0-9_-])${escapado}(?:$|[^a-z0-9_.-])`, 'i');
+    return labels.some(rotulo => rotulo === alvo || regex.test(rotulo));
+  };
+
+  return nomes.filter(nome => !contemArquivoExato(nome));
 }
 """
 
@@ -1646,10 +1706,44 @@ JS_STATUS_UPLOAD = r"""
   };
   const texto = norm(juntar(document.body));
   const numero = texto.match(/(\d+)\s+uploads?\s+conclu/);
+  const fazendoTexto = (
+    texto.includes('fazendo upload') ||
+    texto.includes('fazendo o upload') ||
+    texto.includes('iniciando upload') ||
+    texto.includes('iniciando o upload') ||
+    texto.includes('preparando upload') ||
+    texto.includes('preparando o upload') ||
+    texto.includes('uploading') ||
+    texto.includes('starting upload') ||
+    /\b\d+\s*(min|seg|s|h)\s+restante/.test(texto) ||
+    texto.includes('restam ') ||
+    texto.includes('tempo restante')
+  );
+  let temBarraAtiva = false;
+  try {
+    const barras = document.querySelectorAll('[role="progressbar"]');
+    for (const b of barras) {
+      const st = getComputedStyle(b);
+      if (st && st.display !== 'none' && st.visibility !== 'hidden') {
+        const val = b.getAttribute('aria-valuenow');
+        if (val === null || Number(val) < 100) {
+          temBarraAtiva = true;
+          break;
+        }
+      }
+    }
+  } catch (e) {}
+
   return {
-    fazendo: texto.includes('fazendo upload') || texto.includes('uploading'),
+    fazendo: fazendoTexto || temBarraAtiva,
     concluido: texto.includes('upload conclu') || texto.includes('uploads conclu') || texto.includes('upload complete'),
-    falha: texto.includes('nao foi enviado') || texto.includes('falha no upload') || texto.includes('upload failed'),
+    falha: (
+      texto.includes('nao foi enviado') ||
+      texto.includes('falha no upload') ||
+      texto.includes('upload failed') ||
+      texto.includes('erro no upload') ||
+      texto.includes('upload cancelado')
+    ),
     quantidade: numero ? Number(numero[1]) : 0,
   };
 }
@@ -1809,14 +1903,32 @@ def tratar_conflito(pagina):
                 return
 
 
-def arquivos_faltando(pagina, arquivos):
-    nomes = [arquivo.name for arquivo in arquivos]
+def arquivos_faltando(pagina, arquivos, rolar_tudo=True):
+    """
+    Verifica na grade/lista real da pasta do Google Drive ([role="main"], ignorando a bandeja de upload)
+    quais arquivos da lista ainda não estão presentes na pasta.
+    Rola a lista do topo até o fim para garantir leitura de pastas com 20+ lâminas virtualizadas.
+    """
+    restantes = [arquivo.name for arquivo in arquivos]
+    if not restantes:
+        return []
     try:
-        faltando = pagina.evaluate(JS_FALTANDO, nomes)
+        if rolar_tudo:
+            pagina.evaluate(JS_ROLAR_TOPO)
+            pagina.wait_for_timeout(350)
+        for passo in range(15 if rolar_tudo else 1):
+            restantes = pagina.evaluate(JS_FALTANDO, restantes)
+            if not restantes or not rolar_tudo:
+                break
+            if not pagina.evaluate(JS_ROLAR_LISTA):
+                break
+            pagina.wait_for_timeout(350)
+        if rolar_tudo:
+            pagina.evaluate(JS_ROLAR_TOPO)
     except Exception:
         return list(arquivos)
     por_nome = {arquivo.name: arquivo for arquivo in arquivos}
-    return [por_nome[nome] for nome in faltando if nome in por_nome]
+    return [por_nome[nome] for nome in restantes if nome in por_nome]
 
 
 def enviar_arquivos(pagina, arquivos):
@@ -1834,40 +1946,106 @@ def enviar_arquivos(pagina, arquivos):
 
 def esperar_carregamento(pagina, arquivos, enviados):
     nomes = [arquivo.name for arquivo in arquivos]
-    limite = time.time() + ESPERA_UPLOAD_S
+    inicio = time.time()
+    limite = inicio + ESPERA_UPLOAD_S
     viu_envio = False
+    ciclos_sem_atividade = 0
+
+    # Aguarda o Google Drive abrir a bandeja de upload e iniciar a transferência
+    pagina.wait_for_timeout(3000)
+
     while time.time() < limite:
         tratar_conflito(pagina)
         try:
             status = pagina.evaluate(JS_STATUS_UPLOAD)
-            faltando = pagina.evaluate(JS_FALTANDO, nomes)
+            faltando_visiveis = pagina.evaluate(JS_FALTANDO, nomes)
         except Exception:
             time.sleep(2)
             continue
+
         if status.get("fazendo"):
             viu_envio = True
-        if status.get("falha") and faltando:
-            raise PararPessoa("erro no Drive", "o Drive não enviou todos os arquivos")
-        if not faltando and not status.get("fazendo"):
-            pagina.wait_for_timeout(3000)
+            ciclos_sem_atividade = 0
+            time.sleep(2)
+            continue
+
+        # Se houve falha explícita na bandeja e o upload já parou, sai para a conferência/retentativa
+        if status.get("falha") and time.time() - inicio >= 5:
             return
+
+        # Exige estabilidade sem upload ativo antes de encerrar a espera da bandeja
+        ciclos_sem_atividade += 1
         quantidade = status.get("quantidade") or 0
-        if viu_envio and status.get("concluido") and not status.get("fazendo") and quantidade >= len(enviados):
-            pagina.wait_for_timeout(3000)
+
+        if not faltando_visiveis and ciclos_sem_atividade >= 2:
+            pagina.wait_for_timeout(2000)
             return
+
+        if viu_envio and status.get("concluido") and quantidade >= len(enviados) and ciclos_sem_atividade >= 2:
+            pagina.wait_for_timeout(2500)
+            return
+
+        # Se após 12s a bandeja já fechou/terminou e todos os arquivos constam na rolagem completa da pasta
+        if ciclos_sem_atividade >= 4 and time.time() - inicio >= 10:
+            faltando_pasta = arquivos_faltando(pagina, arquivos, rolar_tudo=True)
+            if not faltando_pasta:
+                return
+
         time.sleep(2)
-    raise PararPessoa("erro no Drive", "as fotos não terminaram de carregar no Drive")
+    raise PararPessoa("erro no Drive", "tempo esgotado aguardando o upload das fotos terminar no Drive")
 
 
 def colocar_arquivos(pagina, arquivos):
-    faltam = arquivos_faltando(pagina, arquivos)
-    if faltam:
-        print(f"    enviando {len(faltam)} arquivo(s)")
+    """
+    Envia os arquivos para a pasta atual do Drive e FAZ A VERIFICAÇÃO REAL (com rolagem completa
+    e recarregamento da pasta no Drive) para garantir que 100% dos arquivos foram enviados e salvos.
+    Se faltar qualquer arquivo, reenvia automaticamente os faltantes (até 3 tentativas).
+    """
+    total = len(arquivos)
+    faltam = arquivos_faltando(pagina, arquivos, rolar_tudo=True)
+    if not faltam:
+        print(f"    conferido no Drive: todos os {total}/{total} arquivo(s) já estavam na pasta")
+        pagina.wait_for_timeout(1500)
+        return
+
+    max_tentativas = 3
+    for tentativa in range(1, max_tentativas + 1):
+        if tentativa == 1:
+            print(f"    enviando {len(faltam)} de {total} arquivo(s) para o Drive...")
+        else:
+            nomes_faltam = ", ".join(a.name for a in faltam[:5])
+            print(
+                f"    retentativa {tentativa}/{max_tentativas}: reenviando {len(faltam)} arquivo(s) "
+                f"que faltaram no Drive ({nomes_faltam})..."
+            )
         enviar_arquivos(pagina, faltam)
         esperar_carregamento(pagina, arquivos, faltam)
-    else:
-        print("    os arquivos já estavam na pasta")
+
+        # 1ª conferência na lista da pasta (rolando do topo ao fim)
         pagina.wait_for_timeout(2000)
+        faltam = arquivos_faltando(pagina, arquivos, rolar_tudo=True)
+
+        # 2ª conferência definitiva: recarrega a pasta do Drive para garantir que todos os arquivos
+        # foram realmente persistidos no servidor do Google Drive (e não apenas listados provisoriamente)
+        try:
+            url_pasta = pagina.url
+            if "drive.google.com/drive/folders/" in url_pasta:
+                pagina.reload(wait_until="domcontentloaded", timeout=60000)
+                esperar_drive_carregar(pagina)
+                pagina.wait_for_timeout(1800)
+                faltam = arquivos_faltando(pagina, arquivos, rolar_tudo=True)
+        except Exception:
+            pass
+
+        if not faltam:
+            print(f"    conferido no Drive: todos os {total}/{total} arquivo(s) foram realmente enviados e confirmados na pasta!")
+            return
+
+    nomes_nao_enviados = ", ".join(a.name for a in faltam[:8])
+    raise PararPessoa(
+        "erro no Drive",
+        f"conferência do Drive reprovada: faltaram {len(faltam)} de {total} arquivo(s) na pasta ({nomes_nao_enviados}) — link não colado",
+    )
 
 
 def voltar_para_pasta(pagina, nome):
