@@ -1129,6 +1129,118 @@ def ir(pagina, url, timeout_ms):
             pagina.wait_for_timeout(2000)
 
 
+JS_TEXTO_PRINCIPAL = r"""
+() => {
+  const clone = document.body ? document.body.cloneNode(true) : null;
+  if (!clone) return '';
+  clone.querySelectorAll('.main-sidebar, aside.sidebar, nav.navbar, header.main-header, script, style').forEach(e => e.remove());
+  return clone.innerText || '';
+}
+"""
+
+JS_MARCAR_BOTAO_SGE = r"""
+([textoAlvo, marca]) => {
+  const norm = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const vis = e => {
+    if (!e) return false;
+    const r = e.getBoundingClientRect();
+    const s = getComputedStyle(e);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+  };
+  document.querySelectorAll('[data-robo-btn="' + marca + '"]').forEach(e => e.removeAttribute('data-robo-btn'));
+  const alvo = norm(textoAlvo);
+  const seletores = 'a, button, input[type=button], input[type=submit], [role=button], [role=menuitem], .dropdown-toggle, .btn';
+  const candidatos = [...document.querySelectorAll(seletores)]
+    .filter(e => vis(e) && !e.closest('.main-sidebar, aside.sidebar'));
+
+  const extrairTexto = e => norm(
+    e.innerText || e.value || e.title || e.getAttribute('aria-label') || e.getAttribute('data-original-title') || ''
+  );
+
+  // 1. Igualdade exata
+  for (const el of candidatos) {
+    const t = extrairTexto(el);
+    if (t === alvo) {
+      const clicavel = el.closest('a, button, input[type=button], input[type=submit], .dropdown-toggle, [role=button], [role=menuitem]') || el;
+      clicavel.setAttribute('data-robo-btn', marca);
+      return true;
+    }
+  }
+
+  // 2. Contém o texto (ex.: botão "Mais Ações" com ícone/caret junto ou "Ver Pedidos")
+  for (const el of candidatos) {
+    const t = extrairTexto(el);
+    if (t && t.length <= 60 && (t.includes(alvo) || (alvo === 'MAIS ACOES' && (t === 'ACOES' || t.startsWith('MAIS ACOES'))))) {
+      const clicavel = el.closest('a, button, input[type=button], input[type=submit], .dropdown-toggle, [role=button], [role=menuitem]') || el;
+      clicavel.setAttribute('data-robo-btn', marca);
+      return true;
+    }
+  }
+
+  // 3. Fallback: se estiver procurando "Mais Ações", procura qualquer .dropdown-toggle no conteúdo principal cujo menu tenha "Ver Pedidos" / "Pedidos"
+  if (alvo === 'MAIS ACOES' || alvo === 'ACOES') {
+    const toggles = [...document.querySelectorAll('.dropdown-toggle, [data-toggle="dropdown"], [data-bs-toggle="dropdown"]')]
+      .filter(e => vis(e) && !e.closest('.main-sidebar, aside.sidebar'));
+    for (const tg of toggles) {
+      const grupo = tg.closest('.btn-group, .dropdown') || tg.parentElement;
+      const textoGrupo = grupo ? norm(grupo.innerText || grupo.textContent || '') : '';
+      if (textoGrupo.includes('PEDIDO') || textoGrupo.includes('MAIS ACOES') || textoGrupo.includes('ACOES')) {
+        tg.setAttribute('data-robo-btn', marca);
+        return true;
+      }
+    }
+    if (toggles.length === 1) {
+      toggles[0].setAttribute('data-robo-btn', marca);
+      return true;
+    }
+  }
+
+  return false;
+}
+"""
+
+JS_FORCAR_CLICK_OPCAO_MENU = r"""
+(textoOpcao) => {
+  const norm = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const alvo = norm(textoOpcao);
+
+  // Abre todos os dropdowns do conteúdo principal caso o clique normal não tenha aberto o menu Bootstrap
+  document.querySelectorAll('.btn-group, .dropdown').forEach(g => {
+    if (!g.closest('.main-sidebar, aside.sidebar')) {
+      g.classList.add('open', 'show');
+    }
+  });
+  document.querySelectorAll('.dropdown-menu').forEach(m => {
+    if (!m.closest('.main-sidebar, aside.sidebar')) {
+      m.classList.add('show');
+      m.style.display = 'block';
+      m.style.visibility = 'visible';
+      m.style.opacity = '1';
+    }
+  });
+
+  const links = [...document.querySelectorAll('.dropdown-menu a, .dropdown-menu button, [role=menuitem], a, button')]
+    .filter(e => !e.closest('.main-sidebar, aside.sidebar'));
+
+  for (const el of links) {
+    const t = norm(el.innerText || el.textContent || el.value || el.title || '');
+    if (t === alvo || (alvo === 'VER PEDIDOS' && (t === 'VER PEDIDOS' || t === 'PEDIDOS' || t === 'LISTAR PEDIDOS' || t === 'VER PEDIDO'))) {
+      el.click();
+      return t;
+    }
+  }
+  for (const el of links) {
+    const t = norm(el.innerText || el.textContent || el.value || el.title || '');
+    if (t && t.length <= 50 && t.includes(alvo)) {
+      el.click();
+      return t;
+    }
+  }
+  return null;
+}
+"""
+
+
 def texto_da_tela(pagina):
     partes = []
     for frame in pagina.frames:
@@ -1137,6 +1249,50 @@ def texto_da_tela(pagina):
         except Exception:
             pass
     return normalizar(" ".join(partes))
+
+
+def texto_conteudo_principal(pagina):
+    """Lê o texto da tela sem a barra lateral (.main-sidebar), evitando confundir o menu lateral 'Grade Financeira' com a tela aberta."""
+    partes = []
+    for frame in pagina.frames:
+        try:
+            partes.append(frame.evaluate(JS_TEXTO_PRINCIPAL))
+        except Exception:
+            try:
+                partes.append(frame.locator("body").inner_text(timeout=2000))
+            except Exception:
+                pass
+    return normalizar(" ".join(partes))
+
+
+def localizar_botao_sge(robo, texto, timeout_ms):
+    """Localiza um botão/link/dropdown no SGE acompanhando abertura de nova aba e ignorando a barra lateral."""
+    limite = time.time() + timeout_ms / 1000
+    while True:
+        robo.seguir_nova_aba()
+        pagina = robo.pagina
+        for frame in pagina.frames:
+            try:
+                _marcas[0] += 1
+                marca = f"b{_marcas[0]}"
+                if frame.evaluate(JS_MARCAR_BOTAO_SGE, [texto, marca]):
+                    loc = frame.locator(f'[data-robo-btn="{marca}"]').first
+                    if loc.count() and loc.is_visible():
+                        return loc
+            except Exception:
+                pass
+            try:
+                for tipo_busca in ("botao", "botao_parecido"):
+                    for loc in candidatos(frame, tipo_busca, texto):
+                        for i in range(min(loc.count(), 15)):
+                            item = loc.nth(i)
+                            if item.is_visible():
+                                return item
+            except Exception:
+                continue
+        if time.time() >= limite:
+            return None
+        time.sleep(0.3)
 
 
 def esperar_carregar(pagina, timeout_ms):
@@ -1211,12 +1367,43 @@ def esperar_pedidos(robo, aluno, timeout_ms):
         achados = pedidos_na_tela(robo, aluno)
         if achados or time.time() >= limite:
             return achados
-        time.sleep(0.5)
+        time.sleep(0.4)
+
+
+def _nome_bate_na_tela_sge(nome_planilha, texto_tela):
+    alvo = normalizar(nome_planilha)
+    if not alvo:
+        return True
+    if alvo in texto_tela:
+        return True
+    ignorar = {"DA", "DE", "DO", "DAS", "DOS", "E"}
+    palavras_sig = [p for p in alvo.split() if len(p) > 2 and p not in ignorar]
+    if len(palavras_sig) >= 2:
+        return all(p in texto_tela for p in palavras_sig[:2])
+    return bool(palavras_sig) and palavras_sig[0] in texto_tela
+
+
+def _fechar_abas_extras(robo):
+    """Garante apenas 1 aba ativa antes de pesquisar em Clientes, para que seguir_nova_aba detecte somente a aba aberta pelo clique no código."""
+    try:
+        abertas = [p for p in robo.contexto.pages if not p.is_closed()]
+        if len(abertas) > 1:
+            principal = abertas[0]
+            for extra in abertas[1:]:
+                try:
+                    extra.close()
+                except Exception:
+                    pass
+            robo.pagina = principal
+            robo.pagina.bring_to_front()
+    except Exception:
+        pass
 
 
 def abrir_cliente(robo, aluno):
-    """Clientes -> Código -> Pesquisar -> clica no 633.<código>."""
+    """Clientes -> Código -> Pesquisar -> clica no 633.<código> e aguarda a tela do cliente (com 'Mais Ações')."""
 
+    _fechar_abas_extras(robo)
     pagina = robo.pagina
     ir(pagina, robo.cfg["url_clientes"], robo.timeout)
     if robo.contas is not None:
@@ -1226,6 +1413,7 @@ def abrir_cliente(robo, aluno):
             raise AlunoPulado("ERRO", "O SGE pediu login e não consegui entrar (confira sge_credenciais.json)")
         ir(pagina, robo.cfg["url_clientes"], robo.timeout)
 
+    esperar_sge_parar(pagina, robo.timeout)
     campo = localizar(pagina, "campo", "Código", robo.timeout)
     if campo is None:
         raise AlunoPulado("ERRO", "Não achei o campo 'Código' na tela de Clientes")
@@ -1235,56 +1423,172 @@ def abrir_cliente(robo, aluno):
     if botao is None:
         raise AlunoPulado("ERRO", "Não achei o botão Pesquisar em Clientes")
     botao.click()
-    esperar_carregar(pagina, robo.timeout)
+    esperar_sge_parar(pagina, robo.timeout)
 
     codigo = robo.cfg["prefixo_codigo"] + aluno["sge"]
-    link = localizar(pagina, "botao", codigo, robo.timeout)
+    link = None
+    # Prioriza o link <a> real dentro da tabela de resultados
+    for frame in pagina.frames:
+        try:
+            cand_link = frame.get_by_role("link", name=codigo, exact=True)
+            if cand_link.count() and cand_link.first.is_visible():
+                link = cand_link.first
+                break
+            cand_tab = frame.locator(f'table a:has-text("{css_texto(codigo)}")')
+            if cand_tab.count() and cand_tab.first.is_visible():
+                link = cand_tab.first
+                break
+        except Exception:
+            continue
+    if link is None:
+        link = localizar(pagina, "botao", codigo, robo.timeout)
     if link is None:
         raise AlunoPulado("NAO ENCONTRADO", f"Cliente {codigo} não apareceu na pesquisa")
+
+    url_antes = pagina.url
+    abas_antes = len([p for p in robo.contexto.pages if not p.is_closed()])
     link.click()
-    esperar_carregar(pagina, robo.timeout)
 
     marcas = [normalizar(t) for t in robo.cfg.get("texto_tela_cliente", []) if t]
     limite = time.time() + robo.timeout / 1000
-    while marcas:
+    reclicou = False
+    inicio_espera = time.time()
+
+    while True:
         robo.seguir_nova_aba()
-        tela = texto_da_tela(robo.pagina)
-        if any(m in tela for m in marcas):
+        abertas_agora = len([p for p in robo.contexto.pages if not p.is_closed()])
+        mudou_url_ou_aba = (abertas_agora > abas_antes) or (robo.pagina.url != url_antes)
+        tela_principal = texto_conteudo_principal(robo.pagina)
+
+        # Confere se o botão "Mais Ações" (ou os próprios pedidos) já apareceu na área principal da tela
+        tem_mais_acoes = localizar_botao_sge(robo, "Mais Ações", 300) is not None
+        if tem_mais_acoes or pedidos_na_tela(robo, aluno):
             break
+        if mudou_url_ou_aba and marcas and any(m in tela_principal for m in marcas):
+            break
+
+        # Se após 3.5s ainda estiver parado na mesma URL de Clientes sem abrir Grade Financeira, força o clique no link do código
+        if not reclicou and not mudou_url_ou_aba and (time.time() - inicio_espera) > 3.5:
+            reclicou = True
+            try:
+                esperar_sge_parar(robo.pagina, 4000)
+                link_retry = localizar(robo.pagina, "botao", codigo, 2000)
+                if link_retry is not None:
+                    link_retry.evaluate("el => { const a = el.closest('a') || el.querySelector('a') || el; a.click(); }")
+            except Exception:
+                pass
+
         if time.time() >= limite:
-            raise AlunoPulado("ERRO", f"Cliquei em {codigo}, mas a Grade Financeira não abriu")
-        time.sleep(0.5)
+            if marcas and not any(m in tela_principal for m in marcas):
+                raise AlunoPulado("ERRO", f"Cliquei em {codigo}, mas a Grade Financeira não abriu")
+            break
+        time.sleep(0.4)
+
+    robo.seguir_nova_aba()
     pagina = robo.pagina
-    esperar_carregar(pagina, robo.timeout)
+    esperar_sge_parar(pagina, robo.timeout)
 
     if robo.cfg.get("conferir_nome") and aluno["nome"]:
         limite = time.time() + robo.timeout / 1000
-        while normalizar(aluno["nome"]) not in texto_da_tela(pagina):
+        while not _nome_bate_na_tela_sge(aluno["nome"], texto_da_tela(pagina)):
+            robo.seguir_nova_aba()
+            pagina = robo.pagina
             if time.time() >= limite:
                 raise AlunoPulado("ERRO", "O nome da planilha não aparece na tela do cliente — nada alterado")
             time.sleep(0.5)
 
 
 def ir_para_pedidos(robo, aluno):
-    """Abre o cliente e segue o caminho (aprendido) até a lista de pedidos dele."""
+    """Abre o cliente e segue o caminho (ex.: 'Mais Ações' -> 'Ver Pedidos') até a lista de pedidos dele."""
 
     abrir_cliente(robo, aluno)
+    robo.seguir_nova_aba()
+    esperar_sge_parar(robo.pagina, robo.timeout)
+
     achados = pedidos_na_tela(robo, aluno)
     if achados:
         return achados
 
-    for texto in robo.cfg.get("caminho_pedidos", []):
-        alvo = localizar(robo.pagina, "botao", texto, 3000) or localizar(robo.pagina, "botao_parecido", texto, robo.timeout)
+    caminho = list(robo.cfg.get("caminho_pedidos") or ["Mais Ações", "Ver Pedidos"])
+    for idx_passo, texto in enumerate(caminho):
+        robo.seguir_nova_aba()
+        esperar_sge_parar(robo.pagina, 5000)
+
+        # Se já estivermos no passo de abrir "Ver Pedidos" (ou se o menu já estiver no DOM), tenta localizar direto
+        alvo = localizar_botao_sge(robo, texto, min(robo.timeout, 8000))
+
+        if alvo is None and normalizar(texto) in ("MAIS ACOES", "ACOES"):
+            # Fallback: se "Ver Pedidos" já estiver no DOM (dentro de um dropdown), força a abertura do dropdown e clica em "Ver Pedidos"
+            clicou_direto = False
+            for frame in robo.pagina.frames:
+                try:
+                    if frame.evaluate(JS_FORCAR_CLICK_OPCAO_MENU, "Ver Pedidos"):
+                        clicou_direto = True
+                        break
+                except Exception:
+                    continue
+            if clicou_direto:
+                esperar_sge_parar(robo.pagina, robo.timeout)
+                achados = esperar_pedidos(robo, aluno, robo.timeout)
+                if achados:
+                    return achados
+
+        if alvo is None and normalizar(texto) == "VER PEDIDOS":
+            # Tenta forçar o clique em "Ver Pedidos" dentro do .dropdown-menu via JS
+            clicou_js = False
+            for frame in robo.pagina.frames:
+                try:
+                    if frame.evaluate(JS_FORCAR_CLICK_OPCAO_MENU, texto):
+                        clicou_js = True
+                        break
+                except Exception:
+                    continue
+            if clicou_js:
+                esperar_sge_parar(robo.pagina, robo.timeout)
+                achados = esperar_pedidos(robo, aluno, robo.timeout)
+                if achados:
+                    return achados
+
         if alvo is None:
             print(f"    Não achei '{texto}' na tela. Vou perguntar o caminho.")
             break
-        alvo.click()
-        esperar_carregar(robo.pagina, robo.timeout)
-        achados = esperar_pedidos(robo, aluno, 2500)
-        if achados:
-            return achados
+
+        try:
+            alvo.click(timeout=5000)
+        except Exception:
+            try:
+                alvo.evaluate("e => e.click()")
+            except Exception:
+                pass
+
+        # Se este passo for "Mais Ações" (abre menu dropdown) e houver próximo passo ("Ver Pedidos"),
+        # aguarda brevemente o menu abrir sem fechar o dropdown esperando 2.5s
+        eh_ultimo_passo = (idx_passo == len(caminho) - 1)
+        if not eh_ultimo_passo:
+            robo.pagina.wait_for_timeout(500)
+            achados_rapido = pedidos_na_tela(robo, aluno)
+            if achados_rapido:
+                return achados_rapido
+            # Se o próximo passo for "Ver Pedidos" e o menu Bootstrap ainda não tiver aberto, garante abertura via JS
+            prox_texto = caminho[idx_passo + 1]
+            if localizar_botao_sge(robo, prox_texto, 1200) is None:
+                for frame in robo.pagina.frames:
+                    try:
+                        if frame.evaluate(JS_FORCAR_CLICK_OPCAO_MENU, prox_texto):
+                            esperar_sge_parar(robo.pagina, robo.timeout)
+                            achados_forcado = esperar_pedidos(robo, aluno, robo.timeout)
+                            if achados_forcado:
+                                return achados_forcado
+                            break
+                    except Exception:
+                        continue
+        else:
+            esperar_sge_parar(robo.pagina, robo.timeout)
+            achados = esperar_pedidos(robo, aluno, 4000)
+            if achados:
+                return achados
     else:
-        if robo.cfg.get("caminho_pedidos"):
+        if caminho:
             achados = esperar_pedidos(robo, aluno, robo.timeout)
             if achados:
                 return achados
@@ -1326,11 +1630,16 @@ def aprender_caminho(robo, aluno):
 
 
 def abrir_pedido(robo, numero):
-    link = localizar(robo.pagina, "botao", numero, robo.timeout)
+    robo.seguir_nova_aba()
+    esperar_sge_parar(robo.pagina, robo.timeout)
+    link = localizar_botao_sge(robo, numero, robo.timeout) or localizar(robo.pagina, "botao", numero, robo.timeout)
     if link is None:
         raise AlunoPulado("ERRO", f"Não achei o pedido {numero} na lista")
-    link.click()
-    esperar_carregar(robo.pagina, robo.timeout)
+    try:
+        link.click(timeout=5000)
+    except Exception:
+        link.evaluate("e => { const a = e.closest('a') || e.querySelector('a') || e; a.click(); }")
+    esperar_sge_parar(robo.pagina, robo.timeout)
     limite = time.time() + robo.timeout / 1000
     while "ITENS DESTE PEDIDO" not in texto_da_tela(robo.pagina):
         robo.seguir_nova_aba()
@@ -1463,6 +1772,22 @@ def achar_opcao_menu(robo, frame, linha):
 
     desejado = normalizar(robo.cfg.get("menu_status") or "Alterar Status do Item")
     alvos_conhecidos = {desejado, "ALTERAR STATUS DO ITEM", "ALTERAR STATUS"}
+
+    # Garante que o dropdown da linha esteja aberto caso o clique normal do Bootstrap tenha falhado
+    try:
+        linha.evaluate(
+            r"""tr => {
+                tr.querySelectorAll('.btn-group, .dropdown').forEach(g => g.classList.add('open', 'show'));
+                tr.querySelectorAll('.dropdown-menu').forEach(m => {
+                    m.classList.add('show');
+                    m.style.display = 'block';
+                    m.style.visibility = 'visible';
+                });
+            }"""
+        )
+    except Exception:
+        pass
+
     parecidas = []
     for escopo in (linha, frame):
         itens = escopo.locator(".dropdown-menu a, .dropdown-menu button, [role=menuitem], a, button")
@@ -1648,18 +1973,25 @@ def alterar_item(robo, frame, item, aluno):
     pagina = robo.pagina
     linha = frame.locator(f'[data-robo-item="{item["linha"]}"]')
 
-    acoes = linha.locator("td").last.locator("a, button, [role=button], .dropdown-toggle")
+    acoes = linha.locator("td").last.locator(".dropdown-toggle, a, button, [role=button]")
     if acoes.count() == 0:
-        acoes = linha.locator("a:has-text('Ações'), button:has-text('Ações'), .dropdown-toggle, td a, td button")
+        acoes = linha.locator(".dropdown-toggle, a:has-text('Ações'), button:has-text('Ações'), td a, td button")
     if acoes.count() == 0:
         raise AlunoPulado("ERRO", "Não achei o botão de Ações do item")
 
     modal = None
     for tentativa in range(2):
         esperar_sge_parar(pagina, robo.timeout)
-        acoes.first.click()
+        try:
+            acoes.first.click(timeout=5000)
+        except Exception:
+            acoes.first.evaluate("e => e.click()")
         pagina.wait_for_timeout(800)
-        achar_opcao_menu(robo, frame, linha).click()
+        opc = achar_opcao_menu(robo, frame, linha)
+        try:
+            opc.click(timeout=5000)
+        except Exception:
+            opc.evaluate("e => e.click()")
         modal = modal_aberto(pagina, robo.timeout)
         if modal is not None:
             break
