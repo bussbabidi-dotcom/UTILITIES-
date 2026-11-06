@@ -28,8 +28,12 @@ Janela: guia Enviar aprovação em organizador_ui.pyw
 import argparse
 import csv
 import json
+import os
 import re
+import shutil
+import sqlite3
 import sys
+import tempfile
 import time
 from datetime import datetime
 from importlib.machinery import SourceFileLoader
@@ -2086,16 +2090,433 @@ def abrir_drive(contexto, linha):
     return contexto.pages[-1], False
 
 
+def extrair_link_drive_do_cartao(linha):
+    """Lê o href direto do botão 'Abrir pasta no Drive' no cartão do MaisBook sem precisar abrir aba."""
+    links = linha.locator('a[title="Abrir pasta no Drive"], a[title*="Drive" i], a[href*="drive.google.com"]')
+    qtd = links.count()
+    for i in range(qtd):
+        try:
+            endereco = (links.nth(i).get_attribute("href") or "").strip()
+            if "drive.google.com" in endereco:
+                return endereco
+        except Exception:
+            continue
+    return ""
+
+
+def id_da_pasta(url_ou_id):
+    texto = str(url_ou_id or "").strip()
+    achado = re.search(r"/folders/([a-zA-Z0-9_-]+)", texto)
+    if achado:
+        return achado.group(1)
+    achado_id = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", texto)
+    if achado_id:
+        return achado_id.group(1)
+    if re.fullmatch(r"[a-zA-Z0-9_-]{15,}", texto):
+        return texto
+    return ""
+
+
 def link_da_pasta(url):
-    achado = re.search(r"/folders/([a-zA-Z0-9_-]+)", url or "")
-    if not achado:
+    pasta_id = id_da_pasta(url)
+    if not pasta_id:
         return ""
-    return "https://drive.google.com/drive/folders/" + achado.group(1)
+    return "https://drive.google.com/drive/folders/" + pasta_id
 
 
-def subir_para_o_drive(contexto, pagina_mb, pessoa, achados):
-    _, linha = achar_cliente(pagina_mb, pessoa)
-    drive, aba_nova = abrir_drive(contexto, linha)
+# ==========================================================
+# Google Drive para Computador (Unidade G:\ + DriveFS SQLite)
+# ==========================================================
+
+NOMES_RAIZ_DRIVEFS = {
+    "my drive",
+    "meu drive",
+    "root",
+    "shared drives",
+    "drives compartilhados",
+    "team drives",
+    "computers",
+    "outros computadores",
+}
+
+
+def localizar_bancos_drivefs():
+    """Localiza os bancos locais metadata_sqlite_db do Google Drive para Desktop no Windows."""
+    bases = []
+    local_app = os.environ.get("LOCALAPPDATA", "")
+    if local_app:
+        bases.append(Path(local_app) / "Google" / "DriveFS")
+    bases.append(Path.home() / "AppData" / "Local" / "Google" / "DriveFS")
+
+    bancos = []
+    vistos = set()
+    for base_dir in bases:
+        if not base_dir.is_dir():
+            continue
+        try:
+            for sub in base_dir.iterdir():
+                if not sub.is_dir():
+                    continue
+                db_file = sub / "metadata_sqlite_db"
+                chave = str(db_file).lower()
+                if db_file.is_file() and chave not in vistos:
+                    try:
+                        if db_file.stat().st_size > 0:
+                            vistos.add(chave)
+                            bancos.append(db_file)
+                    except Exception:
+                        pass
+        except Exception:
+            continue
+    bancos.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    return bancos
+
+
+def raizes_drive_pc():
+    """
+    Retorna as pastas raízes candidatas do Google Drive no computador,
+    priorizando a Unidade G:\\ padrão do Google Drive Desktop.
+    """
+    candidatas = []
+    vistas = set()
+
+    def _add(caminho):
+        try:
+            p = Path(caminho)
+            chave = str(p).lower()
+            if chave not in vistas and p.exists() and p.is_dir():
+                vistas.add(chave)
+                candidatas.append(p)
+        except Exception:
+            pass
+
+    # Prioridade 1: Unidade G:\ padrão do Google Drive Desktop confirmada pelo usuário
+    for sub in ("Meu Drive", "My Drive", "Drives compartilhados", "Shared drives", "Outros computadores", ""):
+        _add(Path("G:\\") / sub if sub else Path("G:\\"))
+
+    # Prioridade 2: Outras letras caso o Windows tenha montado em letra adicional
+    for letra in "DEFHIJKLMNOPQRSTUVWXYZ":
+        raiz = Path(f"{letra}:\\")
+        try:
+            if not raiz.exists():
+                continue
+        except Exception:
+            continue
+        for sub in ("Meu Drive", "My Drive", "Drives compartilhados", "Shared drives"):
+            _add(raiz / sub)
+
+    return candidatas
+
+
+def _abrir_copia_sqlite_drivefs(db_path):
+    """
+    Faz uma cópia rápida do metadata_sqlite_db (incluindo -wal e -shm) para pasta temporária
+    para ler sem travar o Google Drive Desktop e enxergar pastas recém-criadas no WAL.
+    """
+    pasta_tmp = Path(tempfile.mkdtemp(prefix="drivefs_ro_"))
+    destino_db = pasta_tmp / "metadata_sqlite_db"
+    shutil.copy2(db_path, destino_db)
+    for sufixo in ("-wal", "-shm"):
+        arq_aux = Path(str(db_path) + sufixo)
+        if arq_aux.is_file():
+            try:
+                shutil.copy2(arq_aux, Path(str(destino_db) + sufixo))
+            except Exception:
+                pass
+    conn = sqlite3.connect(str(destino_db), timeout=5.0)
+    return conn, pasta_tmp
+
+
+def _fechar_copia_sqlite_drivefs(conn, pasta_tmp):
+    try:
+        if conn:
+            conn.close()
+    except Exception:
+        pass
+    try:
+        if pasta_tmp and Path(pasta_tmp).exists():
+            shutil.rmtree(pasta_tmp, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _descobrir_esquema_drivefs(conn):
+    """Identifica dinamicamente as colunas de items e parents no metadata_sqlite_db do DriveFS."""
+    cur = conn.cursor()
+    tabelas = {
+        r[0]: r[1] or ""
+        for r in cur.execute("SELECT name, sql FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    if "items" not in tabelas:
+        return None
+
+    cols_items = [r[1] for r in cur.execute("PRAGMA table_info(items)").fetchall()]
+    col_id = "stable_id" if "stable_id" in cols_items else ("id" if "id" in cols_items else None)
+    col_cloud = "cloud_id" if "cloud_id" in cols_items else None
+    col_title = "local_title" if "local_title" in cols_items else ("title" if "title" in cols_items else None)
+    col_trashed = "trashed" if "trashed" in cols_items else ("is_deleted" if "is_deleted" in cols_items else None)
+    if not (col_id and col_cloud and col_title):
+        return None
+
+    tabela_pais = None
+    col_filho_pai = None
+    col_pai_id = None
+    for cand_tab in ("parents", "item_parents", "parent_R"):
+        if cand_tab in tabelas:
+            cols_p = [r[1] for r in cur.execute(f"PRAGMA table_info({cand_tab})").fetchall()]
+            c_filho = next((c for c in ("item_stable_id", "stable_id", "item_id", "child_stable_id", "child_id") if c in cols_p), None)
+            c_pai = next((c for c in ("parent_stable_id", "parent_id") if c in cols_p), None)
+            if c_filho and c_pai:
+                tabela_pais = cand_tab
+                col_filho_pai = c_filho
+                col_pai_id = c_pai
+                break
+
+    if not tabela_pais and "parent_stable_id" in cols_items:
+        tabela_pais = "items"
+        col_filho_pai = col_id
+        col_pai_id = "parent_stable_id"
+
+    if not tabela_pais:
+        return None
+
+    return {
+        "col_id": col_id,
+        "col_cloud": col_cloud,
+        "col_title": col_title,
+        "col_trashed": col_trashed,
+        "tabela_pais": tabela_pais,
+        "col_filho_pai": col_filho_pai,
+        "col_pai_id": col_pai_id,
+    }
+
+
+def resolver_pasta_aluno_no_drive_pc(pasta_cloud_id):
+    """
+    Traduz diretamente o cloud_id do botão do MaisBook para o caminho físico exato na Unidade G:\\
+    consultando o índice local do Google Drive Desktop (sem varrer o Drive inteiro).
+    Retorna (caminho_local_path, db_path, stable_id_aluno) ou (None, None, None).
+    """
+    if not pasta_cloud_id:
+        return None, None, None
+
+    raizes = raizes_drive_pc()
+    bancos = localizar_bancos_drivefs()
+
+    for db_path in bancos:
+        conn, pasta_tmp = None, None
+        try:
+            conn, pasta_tmp = _abrir_copia_sqlite_drivefs(db_path)
+            esq = _descobrir_esquema_drivefs(conn)
+            if not esq:
+                continue
+            cur = conn.cursor()
+            filtro_lixo = f" AND COALESCE({esq['col_trashed']}, 0) = 0" if esq["col_trashed"] else ""
+            row = cur.execute(
+                f"SELECT {esq['col_id']}, {esq['col_title']} FROM items "
+                f"WHERE {esq['col_cloud']} = ?{filtro_lixo} LIMIT 1",
+                (pasta_cloud_id,),
+            ).fetchone()
+            if not row:
+                continue
+
+            stable_id_aluno, titulo_aluno = row[0], str(row[1] or "").strip()
+            partes = [titulo_aluno] if titulo_aluno else []
+            atual_id = stable_id_aluno
+            visitados = {atual_id}
+
+            for _ in range(35):
+                pai_row = cur.execute(
+                    f"SELECT {esq['col_pai_id']} FROM {esq['tabela_pais']} WHERE {esq['col_filho_pai']} = ? LIMIT 1",
+                    (atual_id,),
+                ).fetchone()
+                if not pai_row or pai_row[0] is None or pai_row[0] in visitados:
+                    break
+                pai_id = pai_row[0]
+                visitados.add(pai_id)
+                info_pai = cur.execute(
+                    f"SELECT {esq['col_title']} FROM items WHERE {esq['col_id']} = ? LIMIT 1",
+                    (pai_id,),
+                ).fetchone()
+                if not info_pai:
+                    break
+                nome_pai = str(info_pai[0] or "").strip()
+                if nome_pai:
+                    partes.append(nome_pai)
+                atual_id = pai_id
+
+            partes.reverse()
+            # Remove prefixos virtuais de raiz ('My Drive', 'Meu Drive', 'Root', etc.)
+            partes_sem_raiz = list(partes)
+            while partes_sem_raiz and normalizar(partes_sem_raiz[0]) in NOMES_RAIZ_DRIVEFS:
+                partes_sem_raiz.pop(0)
+
+            for seq in (partes_sem_raiz, partes):
+                if not seq:
+                    continue
+                for raiz in raizes:
+                    candidato = raiz.joinpath(*seq)
+                    if candidato.is_dir():
+                        return candidato, db_path, stable_id_aluno
+        except Exception:
+            continue
+        finally:
+            _fechar_copia_sqlite_drivefs(conn, pasta_tmp)
+
+    # Tentativa extra via diretório virtual .shortcut-targets-by-id do Google Drive Desktop no G:\
+    for letra in ("G", "D", "E", "F"):
+        atalho_id = Path(f"{letra}:\\.shortcut-targets-by-id") / pasta_cloud_id
+        try:
+            if atalho_id.is_dir():
+                subpastas = [p for p in atalho_id.iterdir() if p.is_dir()]
+                if len(subpastas) == 1:
+                    return subpastas[0], (bancos[0] if bancos else None), None
+                return atalho_id, (bancos[0] if bancos else None), None
+        except Exception:
+            pass
+
+    return None, None, None
+
+
+def obter_cloud_id_subpasta_drivefs(db_path, stable_id_pai, nome_subpasta, timeout_s=28):
+    """
+    Aguarda o Google Drive Desktop sincronizar a pasta recém-criada (ex.: ALBUM APROVAÇAO)
+    no banco metadata_sqlite_db e devolve o cloud_id oficial para montar o link web.
+    """
+    if not db_path or not Path(db_path).is_file():
+        return ""
+
+    alvo_norm = normalizar(nome_subpasta)
+    limite = time.time() + timeout_s
+    while time.time() < limite:
+        conn, pasta_tmp = None, None
+        try:
+            conn, pasta_tmp = _abrir_copia_sqlite_drivefs(db_path)
+            esq = _descobrir_esquema_drivefs(conn)
+            if esq:
+                cur = conn.cursor()
+                filtro_lixo = f" AND COALESCE(i.{esq['col_trashed']}, 0) = 0" if esq["col_trashed"] else ""
+                if stable_id_pai is not None:
+                    linhas = cur.execute(
+                        f"SELECT i.{esq['col_cloud']}, i.{esq['col_title']} "
+                        f"FROM items i "
+                        f"JOIN {esq['tabela_pais']} p ON i.{esq['col_id']} = p.{esq['col_filho_pai']} "
+                        f"WHERE p.{esq['col_pai_id']} = ?{filtro_lixo}",
+                        (stable_id_pai,),
+                    ).fetchall()
+                    for cloud_id, titulo in linhas:
+                        cid = str(cloud_id or "").strip()
+                        if normalizar(str(titulo or "")) == alvo_norm and cid and not cid.lower().startswith("local"):
+                            return cid
+        except Exception:
+            pass
+        finally:
+            _fechar_copia_sqlite_drivefs(conn, pasta_tmp)
+        time.sleep(1.5)
+    return ""
+
+
+def copiar_arquivos_incremental_drive_pc(pasta_destino, arquivos):
+    """
+    Copia para a pasta do Google Drive no PC (G:\\) apenas os arquivos faltantes ou atualizados,
+    e confere 100% dos arquivos e tamanhos em bytes no Windows Explorer.
+    """
+    pasta_destino = Path(pasta_destino)
+    pasta_destino.mkdir(parents=True, exist_ok=True)
+    copiados = 0
+    mantidos = 0
+
+    for arq_origem in arquivos:
+        origem = Path(arq_origem)
+        destino = pasta_destino / origem.name
+        tam_origem = origem.stat().st_size
+        precisa_copiar = True
+        if destino.is_file():
+            try:
+                if destino.stat().st_size == tam_origem and tam_origem > 0:
+                    precisa_copiar = False
+            except Exception:
+                precisa_copiar = True
+        if precisa_copiar:
+            shutil.copy2(str(origem), str(destino))
+            copiados += 1
+        else:
+            mantidos += 1
+
+    # Conferência rigorosa no Explorer: verifica se 100% dos arquivos existem na pasta com tamanho exato
+    faltando = []
+    for arq_origem in arquivos:
+        origem = Path(arq_origem)
+        destino = pasta_destino / origem.name
+        if not destino.is_file() or destino.stat().st_size != origem.stat().st_size or destino.stat().st_size == 0:
+            faltando.append(origem.name)
+
+    if faltando:
+        raise PararPessoa(
+            "erro no Drive",
+            f"Drive do PC (G:\\): falha ao confirmar cópia de {len(faltando)} arquivo(s): {', '.join(faltando[:5])}",
+        )
+
+    print(
+        f"    Drive do PC ({pasta_destino.name}): {copiados} copiado(s), {mantidos} já atualizado(s) "
+        f"— conferidos {len(arquivos)}/{len(arquivos)} arquivo(s) no Explorer"
+    )
+
+
+def tentar_subir_pelo_drive_pc(linha_cliente, pessoa, achados):
+    """
+    Tenta realizar o envio diretamente pelo Google Drive para Computador (Unidade G:\\ + DriveFS):
+      1. Extrai o ID da pasta do aluno direto do botão do MaisBook
+      2. Resolve instantaneamente o caminho na Unidade G:\\ via metadata_sqlite_db
+      3. Confere se o nome da pasta bate com o aluno
+      4. Cria ALBUM APROVAÇAO (e 20x20 / 24x34 se aplicável) e copia apenas arquivos faltantes/atualizados
+      5. Obtém o link web (https://drive.google.com/drive/folders/<ID>) da pasta ALBUM APROVAÇAO
+    Retorna (link, pasta_aprovacao_criada_no_pc) — se link for vazio, o chamador usa o fallback do navegador.
+    """
+    url_drive_cliente = extrair_link_drive_do_cartao(linha_cliente)
+    id_pasta_cliente = id_da_pasta(url_drive_cliente)
+    if not id_pasta_cliente:
+        return "", False
+
+    pasta_aluno_pc, db_path, stable_id_aluno = resolver_pasta_aluno_no_drive_pc(id_pasta_cliente)
+    if not pasta_aluno_pc or not pasta_aluno_pc.is_dir():
+        return "", False
+
+    # Confere se o nome da pasta no G:\ bate com o nome do formando
+    caminho_str = f"{pasta_aluno_pc.parent.name} {pasta_aluno_pc.name}"
+    if not nomes_batem(pessoa["nome"], caminho_str) and not capa_e_da_pessoa(pessoa["nome"], pasta_aluno_pc.name):
+        raise PararPessoa(
+            "erro no Drive",
+            f"a pasta localizada no Drive do PC ('{pasta_aluno_pc.name}') não bate com '{pessoa['nome']}' — nada foi enviado",
+        )
+
+    print(f"    pasta localizada no Drive do PC: {pasta_aluno_pc}")
+    pasta_aprovacao = pasta_aluno_pc / PASTA_RAIZ
+    pasta_aprovacao.mkdir(parents=True, exist_ok=True)
+
+    if len(achados) >= 2:
+        for item in achados:
+            nome_sub = PASTA_TAMANHO.get(item["tamanho"], item["tamanho"].lower())
+            copiar_arquivos_incremental_drive_pc(pasta_aprovacao / nome_sub, item["arquivos"])
+    else:
+        copiar_arquivos_incremental_drive_pc(pasta_aprovacao, achados[0]["arquivos"])
+
+    # Aguarda o DriveFS atribuir o cloud_id da pasta ALBUM APROVAÇAO para montar o link web
+    print("    aguardando o Google Drive do PC gerar o link da pasta ALBUM APROVAÇAO...")
+    cloud_id_aprovacao = obter_cloud_id_subpasta_drivefs(db_path, stable_id_aluno, PASTA_RAIZ, timeout_s=28)
+    if cloud_id_aprovacao:
+        link = f"https://drive.google.com/drive/folders/{cloud_id_aprovacao}"
+        print(f"    link obtido pelo Drive do PC: {link}")
+        return link, True
+
+    print("    arquivos já copiados no G:\\, mas o ID do link ainda não apareceu no índice local — abrindo navegador apenas para pegar o link...")
+    return "", True
+
+
+def subir_para_o_drive_navegador(contexto, pagina_mb, pessoa, achados, linha_cliente=None):
+    if linha_cliente is None:
+        _, linha_cliente = achar_cliente(pagina_mb, pessoa)
+    drive, aba_nova = abrir_drive(contexto, linha_cliente)
     drive.on("dialog", no_dialogo)
     try:
         esperar_drive_carregar(drive)
@@ -2133,6 +2554,27 @@ def subir_para_o_drive(contexto, pagina_mb, pessoa, achados):
             pagina_mb.bring_to_front()
         except Exception:
             pass
+
+
+def subir_para_o_drive(contexto, pagina_mb, pessoa, achados):
+    """
+    Envia as fotos prioritariamente pelo Google Drive do Computador (Unidade G:\\ + DriveFS).
+    Se a pasta do aluno ainda não estiver sincronizada no PC ou o link não puder ser lido localmente,
+    cai automaticamente para o envio pelo navegador sem quebrar o fluxo.
+    """
+    _, linha = achar_cliente(pagina_mb, pessoa)
+    try:
+        link_pc, copiou_no_pc = tentar_subir_pelo_drive_pc(linha, pessoa, achados)
+        if link_pc:
+            return link_pc
+        if copiou_no_pc:
+            print("    usando fallback do navegador para capturar o link da pasta ALBUM APROVAÇAO...")
+    except PararPessoa:
+        raise
+    except Exception as erro_pc:
+        print(f"    aviso Drive do PC: {base.erro_curto(erro_pc)} — usando navegador como fallback...")
+
+    return subir_para_o_drive_navegador(contexto, pagina_mb, pessoa, achados, linha_cliente=linha)
 
 
 def abrir_edicao(pagina, pessoa):
