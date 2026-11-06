@@ -233,6 +233,18 @@ def normalizar(texto):
     texto = str(texto).strip()
 
     # --------------------------------------------------------------
+    # TRATAR HIFENS E UNDERSCORES COMO ESPAÇO E SEPARAR TAMANHOS
+    # Ex.: Kaylanny-Siqueira-Da-Silca_30X20 -> Kaylanny Siqueira Da Silca 30X20
+    # --------------------------------------------------------------
+
+    texto = re.sub(r"[-_–—−.]+", " ", texto)
+    texto = re.sub(
+        r"(?i)(20\s*[x×*/]\s*20|24\s*[x×*/]\s*34|34\s*[x×*/]\s*24|30\s*[x×*/]\s*20|60\s*[x×*/]\s*20)",
+        r" \1 ",
+        texto,
+    )
+
+    # --------------------------------------------------------------
     # REMOVER ACENTOS
     # --------------------------------------------------------------
 
@@ -276,6 +288,130 @@ def normalizar(texto):
     )
 
     return texto.strip()
+
+
+# ====================================================================
+# EQUIVALÊNCIA DE PALAVRAS DO NOME (HÍFENS, UNDERSCORES E DIGITAÇÃO)
+# ====================================================================
+
+PALAVRAS_IGNORAR_COMPARACAO_CAPA = {
+    "da", "de", "do", "das", "dos", "e", "di", "du", "del",
+    "capa", "capas", "album", "albuns", "lamina", "laminas",
+    "estojo", "jpeg", "jpg", "png", "final", "pronto", "prontos",
+    "aprovacao", "remessa", "lote", "ctt", "contrato",
+    "20x20", "24x34", "34x24", "30x20", "60x20",
+    "berlim", "diamond", "essencial", "classic", "premium", "prime", "moscou",
+}
+
+
+def extrair_palavras_nome(texto):
+
+    norm = normalizar(texto)
+
+    if not norm:
+
+        return []
+
+    return [
+        p for p in norm.split()
+        if len(p) >= 2
+        and not p.isdigit()
+        and p not in PALAVRAS_IGNORAR_COMPARACAO_CAPA
+        and not re.fullmatch(r"\d+x\d+", p)
+    ]
+
+
+def _distancia_levenshtein_ate_1(a, b):
+
+    if a == b:
+
+        return 0
+
+    la, lb = len(a), len(b)
+
+    if abs(la - lb) > 1:
+
+        return 2
+
+    if la == lb:
+
+        diffs = [i for i in range(la) if a[i] != b[i]]
+
+        if len(diffs) == 1:
+
+            return 1
+
+        if len(diffs) == 2 and diffs[1] == diffs[0] + 1:
+
+            i = diffs[0]
+
+            if a[i] == b[i + 1] and a[i + 1] == b[i]:
+
+                return 1
+
+        return 2
+
+    menor, maior = (a, b) if la < lb else (b, a)
+    i = j = diffs = 0
+
+    while i < len(menor) and j < len(maior):
+
+        if menor[i] == maior[j]:
+
+            i += 1
+            j += 1
+
+        else:
+
+            diffs += 1
+
+            if diffs > 1:
+
+                return 2
+
+            j += 1
+
+    return 1
+
+
+def palavras_nome_equivalentes(p1, p2):
+
+    """
+    Compara duas palavras de nome permitindo até 1 erro de digitação em palavras >= 4 letras
+    (ex.: 'silca' vs 'silva', 'kaylanny' vs 'kaylany'), sem confundir gêneros ('paula' vs 'paulo').
+    """
+
+    p1 = normalizar(p1)
+    p2 = normalizar(p2)
+
+    if not p1 or not p2:
+
+        return False
+
+    if p1 == p2:
+
+        return True
+
+    if len(p1) < 4 or len(p2) < 4:
+
+        return False
+
+    if len(p1) == len(p2) and p1[:-1] == p2[:-1] and {p1[-1], p2[-1]} == {"a", "o"}:
+
+        return False
+
+    if p1[0] != p2[0] and not (len(p1) >= 6 and len(p2) >= 6 and p1[1:] == p2[1:]):
+
+        return False
+
+    c1 = re.sub(r"(.)\1+", r"\1", p1)
+    c2 = re.sub(r"(.)\1+", r"\1", p2)
+
+    if c1 == c2 and len(c1) >= 4:
+
+        return True
+
+    return _distancia_levenshtein_ate_1(p1, p2) <= 1
 
 
 # ====================================================================
@@ -411,38 +547,56 @@ def tamanhos_mencionados(texto):
 
 def pontuacao_nome(nome_alvo, nome_candidato):
 
-    nome_alvo = normalizar(nome_alvo)
+    nome_alvo_norm = normalizar(nome_alvo)
 
-    nome_candidato = normalizar(nome_candidato)
+    nome_candidato_norm = normalizar(nome_candidato)
 
-    palavras_alvo = set(nome_alvo.split())
+    if not nome_alvo_norm or not nome_candidato_norm:
 
-    palavras_candidato = set(nome_candidato.split())
+        return -1
+
+    sig_alvo = extrair_palavras_nome(nome_alvo)
+    sig_cand = extrair_palavras_nome(nome_candidato)
+
+    palavras_alvo = set(nome_alvo_norm.split())
+    palavras_candidato = set(nome_candidato_norm.split())
 
     comuns = palavras_alvo & palavras_candidato
 
+    comuns_equivalentes = 0
+
+    for p_alvo in sig_alvo:
+
+        if p_alvo in palavras_candidato:
+
+            comuns_equivalentes += 2
+
+        elif any(palavras_nome_equivalentes(p_alvo, p_cand) for p_cand in sig_cand):
+
+            comuns_equivalentes += 1
+
     if (
-        not nome_alvo
-        or not comuns
-        or (
-            nome_alvo not in nome_candidato
-            and len(comuns) < 2
-        )
+        nome_alvo_norm not in nome_candidato_norm
+        and len(comuns) < 2
+        and comuns_equivalentes < 3
     ):
 
         return -1
 
     pontuacao = 1
 
-    if nome_candidato == nome_alvo:
+    alvo_limpo = " ".join(sig_alvo)
+    cand_limpo = " ".join(sig_cand)
+
+    if nome_candidato_norm == nome_alvo_norm or (alvo_limpo and cand_limpo == alvo_limpo):
 
         pontuacao += 4
 
-    if nome_alvo in nome_candidato:
+    if nome_alvo_norm in nome_candidato_norm or (alvo_limpo and alvo_limpo in cand_limpo):
 
         pontuacao += 3
 
-    pontuacao += len(comuns)
+    pontuacao += len(comuns) + comuns_equivalentes
 
     return pontuacao
 
@@ -1327,9 +1481,9 @@ def eh_lamina(
 
 def eh_nome_capa(nome):
 
-    nome = normalizar(nome)
+    palavras = normalizar(nome).split()
 
-    return nome == "capa" or nome.startswith("capa ")
+    return "capa" in palavras or "capas" in palavras
 
 
 def eh_arquivo_extra(arquivo):
@@ -1669,7 +1823,11 @@ def nomes_no_caminho(arquivo, limite):
 
 def capa_da_pessoa(nome_cliente, nomes):
 
-    """O nome inteiro precisa bater. 'Maria' + 'Lima' de outra pessoa não serve."""
+    """
+    O nome inteiro precisa bater. 'Maria' + 'Lima' de outra pessoa não serve.
+    Aceita '-' e '_' no lugar de espaço (ex.: Kaylanny-Siqueira-Da-Silca_30X20)
+    e tolera até 1 letra de erro de digitação em sobrenome/nome quando o restante do nome bate.
+    """
 
     alvo = normalizar(nome_cliente)
 
@@ -1677,7 +1835,8 @@ def capa_da_pessoa(nome_cliente, nomes):
 
         return False
 
-    texto = normalizar(" ".join(nomes))
+    lista_nomes = [str(n) for n in (nomes or []) if n]
+    texto = normalizar(" ".join(lista_nomes))
 
     if alvo in texto:
 
@@ -1695,7 +1854,49 @@ def capa_da_pessoa(nome_cliente, nomes):
 
     palavras = set(texto.split())
 
-    return all(palavra in palavras for palavra in significativas)
+    if all(palavra in palavras for palavra in significativas):
+
+        return True
+
+    palavras_cand_lista = extrair_palavras_nome(" ".join(lista_nomes))
+
+    if not palavras_cand_lista:
+
+        return False
+
+    # 1. Todas as palavras significativas do cliente estão no arquivo/caminho
+    # (permitindo até 1 palavra com 1 letra de diferença como 'Silca' vs 'Silva')
+    exatas = sum(1 for p_alvo in significativas if p_alvo in palavras)
+    equivalentes = sum(
+        1
+        for p_alvo in significativas
+        if p_alvo in palavras
+        or any(palavras_nome_equivalentes(p_alvo, p_cand) for p_cand in palavras_cand_lista)
+    )
+
+    if equivalentes == len(significativas) and exatas >= max(1, len(significativas) - 1):
+
+        return True
+
+    # 2. O arquivo tem 2+ palavras significativas (ex.: Kaylanny-Siqueira_30X20),
+    # começa pelo mesmo 1º nome e todas as palavras do arquivo pertencem ao nome do cliente
+    if lista_nomes:
+
+        palavras_stem = extrair_palavras_nome(lista_nomes[0])
+
+        if len(palavras_stem) >= 2 and palavras_nome_equivalentes(palavras_stem[0], significativas[0]):
+
+            exatas_stem = sum(1 for w in palavras_stem if w in set(significativas))
+            todas_batem = all(
+                any(palavras_nome_equivalentes(w, p_alvo) for p_alvo in significativas)
+                for w in palavras_stem
+            )
+
+            if todas_batem and exatas_stem >= max(1, len(palavras_stem) - 1):
+
+                return True
+
+    return False
 
 
 def tamanho_da_capa(arquivo, limite):
@@ -1825,18 +2026,64 @@ def escolher_melhor_capa(candidatos, tamanho=None):
     return candidatos[0][2]
 
 
+def encontrar_pastas_capas_gerais(albuns_colacao):
+
+    pastas = []
+    vistos = set()
+
+    def _add(p):
+
+        try:
+
+            if p and p.exists() and p.is_dir():
+
+                chave = str(p.resolve())
+
+                if chave not in vistos:
+
+                    vistos.add(chave)
+                    pastas.append(p)
+
+        except Exception:
+
+            pass
+
+    _add(albuns_colacao / PASTA_CAPAS)
+
+    try:
+
+        for item in albuns_colacao.iterdir():
+
+            if not item.is_dir():
+
+                continue
+
+            norm = normalizar(item.name)
+
+            if norm.startswith("capa"):
+
+                _add(item)
+
+            elif item.name.upper() in QUANTIDADE_LAMINAS:
+
+                _add(item / "CAPAS")
+
+    except Exception:
+
+        pass
+
+    return pastas
+
+
 def procurar_capa_geral(
     albuns_colacao,
     nome_cliente,
     tamanho
 ):
 
-    pasta_capas = (
-        albuns_colacao
-        / PASTA_CAPAS
-    )
+    pastas_capas = encontrar_pastas_capas_gerais(albuns_colacao)
 
-    if not pasta_capas.exists():
+    if not pastas_capas:
 
         return None
 
@@ -1844,41 +2091,49 @@ def procurar_capa_geral(
 
     try:
 
-        for arquivo in listar_arquivos_capas(pasta_capas):
+        for pasta_capas in pastas_capas:
 
-            nomes = nomes_no_caminho(arquivo, pasta_capas)
+            for arquivo in listar_arquivos_capas(pasta_capas):
 
-            if not capa_da_pessoa(nome_cliente, nomes):
+                nomes = nomes_no_caminho(arquivo, pasta_capas)
 
-                continue
+                if not capa_da_pessoa(nome_cliente, nomes):
 
-            pontuacao = max(
-                pontuacao_nome(nome_cliente, nome)
-                for nome in nomes
-            )
+                    continue
 
-            pontuacao = max(
-                pontuacao,
-                pontuacao_nome(nome_cliente, " ".join(nomes)),
-            )
+                pontuacao = max(
+                    pontuacao_nome(nome_cliente, nome)
+                    for nome in nomes
+                )
 
-            if pontuacao < 0:
+                pontuacao = max(
+                    pontuacao,
+                    pontuacao_nome(nome_cliente, " ".join(nomes)),
+                )
 
-                continue
+                if pontuacao < 0:
 
-            detectado, forca = tamanho_da_capa(
-                arquivo,
-                pasta_capas
-            )
+                    continue
 
-            # Sem o tamanho pedido, não usa capa de outro tamanho.
-            if detectado != tamanho or forca <= 0:
+                detectado, forca = tamanho_da_capa(
+                    arquivo,
+                    pasta_capas
+                )
 
-                continue
+                do_arquivo = tamanhos_mencionados(arquivo.stem)
 
-            candidatos.append(
-                (forca, pontuacao, arquivo)
-            )
+                if detectado == tamanho and forca > 0:
+
+                    candidatos.append(
+                        (forca, pontuacao, arquivo)
+                    )
+
+                elif do_arquivo == {tamanho}:
+
+                    # Nome do arquivo traz explicitamente o tamanho (ex.: Kaylanny-Siqueira-Da-Silca_30X20)
+                    candidatos.append(
+                        (2, pontuacao, arquivo)
+                    )
 
     except Exception as erro:
 
@@ -1895,7 +2150,8 @@ def procurar_capa_geral(
 
 def procurar_capa_antiga(
     pasta_cliente,
-    tamanho
+    tamanho,
+    nome_cliente=None
 ):
 
     if not pasta_cliente:
@@ -1921,7 +2177,7 @@ def procurar_capa_antiga(
                 continue
 
             # ======================================================
-            # CAPAS ANTIGAS
+            # CAPAS ANTIGAS OU COM NOME-DO-ALUNO_TAMANHO NA PASTA
             # ======================================================
             #
             # capa.jpg
@@ -1929,10 +2185,22 @@ def procurar_capa_antiga(
             # capa-final.jpg
             # capa_20x20.jpg
             # capa 24x34.jpg
+            # Kaylanny-Siqueira-Da-Silca_30X20.jpg
             #
             # ======================================================
 
-            if not eh_nome_capa(arquivo.stem):
+            tem_palavra_capa = eh_nome_capa(arquivo.stem)
+            tem_nome_pessoa = False
+
+            if not tem_palavra_capa and numero_lamina(arquivo) == 999999:
+
+                alvo_comp = nome_cliente or pasta_cliente.name
+
+                if capa_da_pessoa(alvo_comp, [arquivo.stem]):
+
+                    tem_nome_pessoa = True
+
+            if not tem_palavra_capa and not tem_nome_pessoa:
 
                 continue
 
@@ -1941,14 +2209,19 @@ def procurar_capa_antiga(
                 pasta_cliente
             )
 
-            # Capa sem tamanho, ou de outro tamanho, não entra no lugar.
-            if detectado != tamanho or forca <= 0:
+            do_arquivo = tamanhos_mencionados(arquivo.stem)
 
-                continue
+            if detectado == tamanho and forca > 0:
 
-            candidatos.append(
-                (forca, 0, arquivo)
-            )
+                candidatos.append(
+                    (forca, 1 if tem_nome_pessoa else 0, arquivo)
+                )
+
+            elif do_arquivo == {tamanho}:
+
+                candidatos.append(
+                    (2, 1 if tem_nome_pessoa else 0, arquivo)
+                )
 
     except Exception as erro:
 
@@ -2012,7 +2285,8 @@ def encontrar_capa(
 
     capa = procurar_capa_antiga(
         pasta_cliente,
-        tamanho
+        tamanho,
+        nome_cliente
     )
 
     if capa:
@@ -2506,7 +2780,7 @@ def processar_tamanho(
 
                 continue
 
-            if not eh_nome_capa(arquivo.stem):
+            if not eh_nome_capa(arquivo.stem) and not capa_da_pessoa(nome, [arquivo.stem]):
 
                 continue
 
@@ -2515,11 +2789,15 @@ def processar_tamanho(
                 escolha["pasta_album"],
             )
 
-            if detectado != tamanho or forca <= 0:
+            do_arquivo = tamanhos_mencionados(arquivo.stem)
 
-                continue
+            if detectado == tamanho and forca > 0:
 
-            extras_capa.append((forca, 0, arquivo))
+                extras_capa.append((forca, 0, arquivo))
+
+            elif do_arquivo == {tamanho}:
+
+                extras_capa.append((2, 0, arquivo))
 
         capa = escolher_melhor_capa(extras_capa, tamanho)
 
