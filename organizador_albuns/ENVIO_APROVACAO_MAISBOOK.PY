@@ -782,19 +782,34 @@ PALAVRAS_ESTRUTURA_SERVIDOR = {
 
 
 def capa_e_da_pessoa(nome, arquivo, sge=""):
-    """Confere se o caminho do arquivo/pasta pertence exclusivamente à pessoa (sem confundir homônimos como 'Ana Paula')."""
+    """
+    Confere se o caminho do arquivo/pasta pertence exclusivamente à pessoa
+    (sem confundir homônimos como 'Ana Paula'), aceitando '-' e '_' no lugar do espaço
+    (ex.: Kaylanny-Siqueira-Da-Silca_30X20) e até 1 letra de erro de digitação.
+    """
     texto_norm = normalizar(str(arquivo))
     palavras_texto = set(texto_norm.split())
     sge_limpo = str(sge or "").strip()
     if sge_limpo and len(sge_limpo) >= 3 and sge_limpo in palavras_texto:
         return True
-    if proc.capa_da_pessoa(nome, [str(arquivo)]):
+    try:
+        p_arq_ini = Path(str(arquivo))
+        nomes_caminho = [p_arq_ini.stem, str(arquivo)]
+    except Exception:
+        nomes_caminho = [str(arquivo)]
+    if proc.capa_da_pessoa(nome, nomes_caminho):
         return True
     palavras = [p for p in normalizar(nome).split() if len(p) > 2 and p not in IGNORAR_NO_NOME]
     if not palavras:
         return False
     # Só aceita abreviação (2+ palavras iniciais) se o nome do arquivo/pasta não tiver sobrenomes conflitantes de outra pessoa
-    if len(palavras) >= 2 and all(palavra in palavras_texto for palavra in palavras[:2]):
+    palavras_texto_lista = list(palavras_texto)
+    primeiras_batem = len(palavras) >= 2 and all(
+        palavra in palavras_texto
+        or any(proc.palavras_nome_equivalentes(palavra, pt) for pt in palavras_texto_lista)
+        for palavra in palavras[:2]
+    )
+    if primeiras_batem:
         try:
             p_arq = Path(str(arquivo))
             partes_cand = [p_arq.stem]
@@ -806,9 +821,17 @@ def capa_e_da_pessoa(nome, arquivo, sge=""):
                 and not w.isdigit()
                 and w not in IGNORAR_NO_NOME
                 and w not in PALAVRAS_ESTRUTURA_SERVIDOR
+                and not re.fullmatch(r"\d+x\d+", w)
             ]
-            if palavras_cand and all(w in set(palavras) for w in palavras_cand):
-                return True
+            if palavras_cand:
+                exatas = sum(1 for w in palavras_cand if w in set(palavras))
+                todas_equivalentes = all(
+                    w in set(palavras)
+                    or any(proc.palavras_nome_equivalentes(w, p_alvo) for p_alvo in palavras)
+                    for w in palavras_cand
+                )
+                if todas_equivalentes and exatas >= max(1, len(palavras_cand) - 1):
+                    return True
         except Exception:
             pass
     return False
@@ -820,24 +843,28 @@ def procurar_capa_da_pessoa(albuns, nome, tamanho, sge=""):
     if capa_geral and Path(capa_geral).is_file():
         return Path(capa_geral)
 
-    # 2. Procura na pasta CAPAS geral por nome ou código SGE
-    pasta_capas = albuns / proc.PASTA_CAPAS
-    candidatos_capas = []
-    if pasta_capas.exists():
-        candidatos_capas.extend(proc.listar_arquivos_capas(pasta_capas))
-
-    # 3. Também procura se existir estrutura de lote <TAMANHO>/CAPAS
+    # 2. Procura nas pastas CAPAS gerais por nome (incluindo com '-' ou '_' no lugar de espaço) ou código SGE
+    pastas_busca = list(proc.encontrar_pastas_capas_gerais(albuns))
     pasta_capas_lote = albuns / tamanho / "CAPAS"
-    if pasta_capas_lote.exists():
-        candidatos_capas.extend(proc.listar_arquivos_capas(pasta_capas_lote))
+    if pasta_capas_lote.exists() and pasta_capas_lote not in pastas_busca:
+        pastas_busca.append(pasta_capas_lote)
+
+    candidatos_capas = []
+    vistos_arq = set()
+    for p_capas in pastas_busca:
+        for arq in proc.listar_arquivos_capas(p_capas):
+            ch_arq = str(arq)
+            if ch_arq not in vistos_arq:
+                vistos_arq.add(ch_arq)
+                candidatos_capas.append((p_capas, arq))
 
     melhor = None
-    for arquivo in candidatos_capas:
+    for raiz_capa, arquivo in candidatos_capas:
         if not capa_e_da_pessoa(nome, arquivo, sge=sge):
             continue
         nomes = [arquivo.stem]
         for pai in arquivo.parents:
-            if pai in (pasta_capas, pasta_capas_lote, albuns):
+            if pai in (raiz_capa, albuns):
                 break
             nomes.append(pai.name)
         mencoes = set()
@@ -851,7 +878,11 @@ def procurar_capa_da_pessoa(albuns, nome, tamanho, sge=""):
             prioridade = 1
         else:
             prioridade = 0
-        pts = max(proc.pontuacao_nome(nome, " ".join(nomes)), 1 if (sge and str(sge) in normalizar(arquivo.stem).split()) else -1)
+        pts = max(
+            proc.pontuacao_nome(nome, arquivo.stem),
+            proc.pontuacao_nome(nome, " ".join(nomes)),
+            1 if (sge and str(sge) in normalizar(arquivo.stem).split()) else -1,
+        )
         candidato = (prioridade, pts, -len(arquivo.parts))
         if melhor is None or candidato > melhor[0]:
             melhor = (candidato, arquivo)
@@ -933,11 +964,12 @@ def capa_do_album(albuns, nome, tamanho, escolha, sge=""):
         print(f"   capa ({tamanho}): {capa}")
         return capa
     if pasta:
-        capa = proc.procurar_capa_antiga(pasta, tamanho)
+        capa = proc.procurar_capa_antiga(pasta, tamanho, nome)
     if not capa and escolha:
         extras = [
             arquivo for arquivo in (escolha.get("extras") or [])
-            if proc.eh_lamina(arquivo) and proc.eh_nome_capa(arquivo.stem)
+            if proc.eh_lamina(arquivo)
+            and (proc.eh_nome_capa(arquivo.stem) or capa_e_da_pessoa(nome, arquivo.stem, sge=sge))
         ]
         capa = extras[0] if extras else None
     if capa:
